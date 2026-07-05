@@ -1,11 +1,8 @@
-# MetaBCI Full Requirements
-# For development and full installation, use: pip install -r requirements.txt
-# For modular installation, use: pip install metabci[brainda] or pip install metabci[all]
+# MetaBCI-USTB-2026 requirements
+# Install with:
+#   pip install -r requirements.txt
 
-# PyTorch (uncomment the appropriate line for your platform)
-# -f https://download.pytorch.org/whl/torch_stable.html
-
-# ============== Core Dependencies ==============
+# ============== Core dependencies ==============
 numpy
 scipy
 tqdm>=4.32.0
@@ -13,25 +10,35 @@ requests
 requests[socks]
 joblib
 
-# ============== brainda (datasets, algorithms, deep learning) ==============
-mat73
+# ============== brainda: datasets and algorithms ==============
 mne>=0.21.1
 mne-bids
 pandas
-py7zr
-h5py
 scikit-learn
+h5py
+mat73
+py7zr
 pooch
-torch>=1.7.1
-skorch
-einops==0.8.1
 autograd
 pymanopt>=2.0
 
-# ============== brainflow (signal acquisition) ==============
+# ============== Deep learning ==============
+torch>=1.7.1
+skorch
+einops==0.8.1
+
+# ============== Visualization and media ==============
+matplotlib
+Pillow
+
+# ============== brainflow: online acquisition ==============
 pylsl
 keyboard==0.13.5
 
-# ============== brainstim (stimulus presentation) ==============
-# Note: psychopy may have platform-specific installation requirements
+# ============== brainstim: stimulus presentation ==============
+# PsychoPy can have platform-specific installation requirements.
 psychopy>=2022.1.4
+pyserial
+
+# ============== Development and verification ==============
+pytest

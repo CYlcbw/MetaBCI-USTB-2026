@@ -1,24 +1,34 @@
-# MetaBCI-USTB
+# MetaBCI-USTB-2026
 
 ## Welcome!
-该工程为2025世界机器人大赛-BCI脑控机器人大赛MetaBCI创新应用开发赛项的代码。
+该工程为世界机器人大赛-BCI脑控机器人大赛 MetaBCI 创新应用开发赛项的代码。
 
 ## Basic information！
-项目名称：面向轻度认知障碍的BCI-VR交互训练系统
-队伍名称：北科数字疗法队
+项目名称：基于 MetaBCI 架构的生态式 VR 空间认知训练平台
+
 队伍单位：北京科技大学
-团队成员：梁光金 杨思雨 袁胜豪 徐晨阳 邢风
+
+参赛人员：杨思雨 孙宏晨 傅岸峰 邵文乐 韩晓珊 梁光金
+
 所属赛道：主动控制赛道
 
 ## Project Introduction！
-轻度认知障碍（MCI）是阿尔茨海默病早期阶段，亟需创新的非药物数字疗法。本项目旨在开发基于脑机接口（BCI）与虚拟现实（VR）的游戏化训练系统，助力MCI患者认知康复。系统以MetaBCI为基础，新增四分类运动想象（MI）范式支持，开发听声辨位VR游戏，通过脑电控制游戏角色移动捕捉游戏中的动物，从而提升患者空间认知、执行功能和大脑活跃度。项目拟在MetaBCI平台新增多分类脑电解码算法、特征提取与模型训练方法，开发模型可视化技术，适配OpenBCI设备及VR场景任务，并构建四分类MI数据集。项目预期应用于医疗机构与居家康复场景，通过趣味性游戏化训练增强患者依从性，显著改善注意力、记忆力和空间认知等功能，为BCI-VR技术在神经康复领域的应用提供新范式。
+本项目面向空间认知能力训练与脑机接口主动控制应用，基于 MetaBCI 架构搭建生态式 VR 空间认知训练平台。系统以四分类运动想象（MI）脑电识别为核心，将受试者的运动想象脑电信号解码为前、后、左、右四类方位控制指令，并通过 Socket 通讯驱动 VR 交互训练游戏中的虚拟角色完成移动与目标捕获任务。
+
+本次线上演示将开展平台实测验证。实验配套采集硬件选用 NeuroScan 32 通道脑电仪，其中专门划分 8 个导联电极用于运动想象信号采集，全部导联电极阻抗统一调试至 20 千欧以内，以保障脑电原始采集数据具备较高信噪比。实时波形画面显示，整套采集硬件工况稳定、信号传输无异常。
+
+平台演示阶段，受试者佩戴 VR 设备并完成系统通讯对接。前期离线数据集采用五折交叉验证方案测算，模型平均识别精度为 61.667%。在线实操过程中，受试者依据 5 秒内播放的听觉提示判断目标生物所在方位，同步输出对应运动想象脑电信号操控虚拟角色位移；顺利捕获目标后，界面左上角积分自动累加 5 分。整套训练流程融合了空间方位辨别、短期工作记忆与认知执行能力训练，可用于验证 BCI-VR 在空间认知训练场景中的交互闭环效果。
 
 ## Project technical path！
-依托MetaBCI开源平台架构，“面向轻度认知障碍的BCI-VR交互训练系统”项目高效集成了MI编解码、VR平台呈现、VR游戏交互等通信流程，实现4指令BCI-VR交互训练系统。
-* 在刺激呈现方面，调用brainstim子平台下新增的4分类MI范式，采集MI脑电信号。
-* 在信号处理方面，对brainda子平台新增熵特征提取算法，用于对采集的脑电信号进行特征分析。
-* 在信号解码方面，对brainda子平台新增MI范式识别算法EEG-Conformer，对用户脑电信号进行特征提取与模式识别，解码为外设指令。
-* 在外设控制方面，对brainflow子平台新增VR游戏通信控制模块，通过Socket协议将意图指令发送至VR游戏，控制VR角色完成指定任务动作。
+依托 MetaBCI 开源平台架构，本项目集成了运动想象范式呈现、脑电信号采集、离线模型训练、在线实时解码与 VR 外设交互控制流程，实现四指令 BCI-VR 空间认知训练系统。
+
+* 在刺激呈现方面，调用 brainstim 子平台下新增的四分类 MI 范式，完成左手、右手、脚部、双手运动想象提示与反馈，并映射为 VR 场景中的左、右、后、前方位指令。
+* 在数据集支持方面，新增 `USTB2026MI4C` 四分类运动想象数据集类，支持数据读取，并在本地数据不存在时通过 GitHub raw 地址自动下载示例数据。
+* 在信号处理方面，对 brainda 子平台补充熵特征分析与可视化方法，用于辅助观察和分析脑电信号特征。
+* 在信号解码方面，新增并适配 EEG-Conformer、EEG-TCNet、EEG-ATCNet、TCNet-Fusion 等深度学习模型，其中在线演示默认采用 EEG-Conformer 完成四分类运动想象识别。
+* 在设备接入方面，支持 NeuroScan Curry LSL 数据流输入，并补充 OpenBCI GUI LSL 与 UDP marker 触发测试工具，便于不同采集硬件下进行联调验证。
+* 在外设控制方面，对 brainflow 子平台新增在线指令输出流程，通过 Socket 协议将解码结果发送至 VR 训练游戏，控制虚拟角色完成移动、定位与抓捕任务。
+
 <p align="center">
 <img src="images/项目技术路径图.png" alt="项目技术路径图" width="400"/>
 </p>
@@ -27,19 +37,31 @@
 </p>
 
 ## Code testing instructions！
-需要在原有的环境下添加einops==0.8.1和keyboard==0.13.5两个新的软件库（该部分内容已在“requirements.txt”文件中体现）。
+建议在原有 MetaBCI 环境基础上安装项目依赖，新增依赖已在 `requirements.txt` 与 `pyproject.toml` 中体现，主要包括 `mne-bids`、`einops==0.8.1`、`pylsl`、`keyboard==0.13.5` 与 `psychopy>=2022.1.4`。
 
-需要将MetaMCI离线demo数据“MI”放到“/demos/brainflow_demos/data”文件夹下面。
+四分类 MI 示例数据已放置在 `demos/brainflow_demos/data` 目录下；同时 `USTB2026MI4C` 数据集类已支持在本地数据不存在时自动下载数据。
 
-制作的听声辨位游戏的APK安装文件[metabcites791.apk.1](https://drive.google.com/file/d/1FN9KyAnlG2NWmN0M2kGu_J3Ve9mmhP_1/view?usp=sharing)，进行在线功能测试时需要将该安装包拷贝并安装到PICO 4 Uitra中。
+主要测试文件如下：
 
-进行测试的文件主要为：stim_demo.py、Offline_mi4c_new.py和Online_mi4c_new.py三个文件。在stim_demo.py和Offline_mi4c_new.py文件上的详细的测试过程在“5.新增功能点说明”和“6.修复功能点说明”部分进行了详细的说明。下面主要介绍Online_mi4c_new.py文件的测试流程：
-* 首先确保脑电信号采集和程序运行在同一个主机上，然后将主机和PICO 4 Uitra连接到同一个路由器；
-* 连接32导联NeuroScan设备，脑电帽使用导电膏版本的脑电帽，佩戴好脑电帽，将所有导联的阻抗调整到10KΩ以下；
-* 设置Curry9软件信号采集参数，选用M1和M2作为参考电极，采样频率为256Hz，进行50Hz陷波滤波和1Hz-50Hz的带通滤波，启用Curry9软件中的LSL功能；
-* 打开Curry9软件的信号采集功能；
-* 修改文件中的“MODEL_PATH”变量的值为当前电脑下的模型的路径；
-* 运行Online_mi4c_new.py文件，此时程序等待连接PICO 4 Uitra，被试佩戴PICO 4 Uitra并打开安装好的游戏，程序和PICO 4 Uitra即可完成连接；
-* 然后Online_mi4c_new.py程序将会先进行离线数据准确率验证，最后分类结果为5折交叉验证的平均准确率；
-* 得到准确率后，程序提示"按空格键开始实时解码..."，需要主试人员点击空格开始正式的在线实验；
-* 在线实验选择5折交叉验过程中保存的5个模型中的在测试集上最优的模型。完整的在线实验流程也在提交的视频中体现。
+* `demos/brainstim_demos/stim_demo.py`：四分类 MI 刺激范式与 VR 训练入口配置示例。
+* `demos/brainflow_demos/Offline_mi4c.py`：四分类 MI 离线验证 demo，默认加载 `USTB2026MI4C` 数据集并进行五折模型测试。
+* `demos/brainflow_demos/Online_mi4c_new_lsl.py`：面向 NeuroScan Curry LSL 数据流的在线解码 demo。
+* `demos/brainflow_demos/Online_mi4c_new_OpenBCI.py`：面向 OpenBCI GUI LSL 数据流的在线解码 demo。
+* `demos/brainstim_demos/openbci_gui_trigger_test.py`：OpenBCI GUI UDP marker 通路测试脚本。
+
+NeuroScan Curry LSL 在线测试流程：
+
+* 确保脑电信号采集程序、在线解码程序与 VR 设备处于同一网络环境；
+* 连接 NeuroScan 32 通道脑电设备，佩戴脑电帽并将用于运动想象采集的 8 个导联阻抗调试至 20 千欧以内；
+* 在 Curry 软件中设置采样率为 256 Hz，启用必要的工频陷波与带通滤波，并开启 LSL 数据流输出；
+* 确认 LSL 流名称与 `Online_mi4c_new_lsl.py` 中的 `LSL_EEG_STREAM_NAME` 配置一致，默认值为 `CURRYStream`；
+* 运行 `Online_mi4c_new_lsl.py`，程序将先加载离线数据并输出五折交叉验证结果；
+* 程序提示 `按空格键开始实时解码...` 后，由主试人员按空格进入正式在线解码；
+* 受试者根据 VR 游戏中的听觉提示完成对应运动想象任务，系统实时输出前、后、左、右四类控制指令并驱动 VR 角色完成空间认知训练。
+
+OpenBCI GUI 在线测试流程：
+
+* 打开 OpenBCI GUI 并开启 EEG LSL 数据流；
+* 确认 `Online_mi4c_new_OpenBCI.py` 中的 `OPENBCI_STREAM_NAME` 与 GUI 输出流名称一致，默认值为 `obci_eeg1`；
+* 如需测试 marker 通路，可运行 `openbci_gui_trigger_test.py` 向 OpenBCI GUI Marker Widget 发送 UDP marker；
+* 运行 `Online_mi4c_new_OpenBCI.py`，按照程序提示完成离线验证与在线解码流程。
