@@ -30,7 +30,7 @@
 * 在外设控制方面，对 brainflow 子平台新增在线指令输出流程，通过 Socket 协议将解码结果发送至 VR 训练游戏，控制虚拟角色完成移动、定位与抓捕任务。
 
 <p align="center">
-<img src="images/项目技术路径图.png" alt="项目技术路径图" width="400"/>
+<img src="images/项目技术路径图.jpg" alt="项目技术路径图" width="600"/>
 </p>
 <p align="center">
 项目技术路径图
