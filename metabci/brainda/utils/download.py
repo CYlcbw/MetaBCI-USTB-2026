@@ -38,7 +38,6 @@ def _url_to_local_path(url: str, local_path: Union[str, Path]) -> str:
         raise ValueError if url is not valid
     """
     destination = urlparse(url).path
-    print("--------ssssss,", destination)
     # First char should be '/', and it needs to be discarded
     if len(destination) < 2 or destination[0] != "/":
         raise ValueError("Invalid URL")

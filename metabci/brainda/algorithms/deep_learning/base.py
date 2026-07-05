@@ -213,6 +213,18 @@ class NeuralNetClassifierNoLog(NeuralNetClassifier):
             net.load_params(checkpoint=callbacks["checkpoint"])
         return net
 
+    ### ==============================添加内容=============================== ###
+    def forward_(self, x):
+        # convert to torch tensor
+        if isinstance(x, np.ndarray):
+            x = torch.tensor(x, dtype=torch.float32)
+        elif x.dtype != torch.float64:
+            x = x.to(dtype=torch.float64)
+        elif not isinstance(x, torch.Tensor):
+            raise ValueError("Input X must be a numpy array or torch tensor.")
+        return self.module.forward(x)
+    ### ==============================添加内容=============================== ###
+
 
 class SkorchNet:
     def __init__(self, module):
@@ -221,7 +233,7 @@ class SkorchNet:
     def __call__(self, *args, **kwargs):
         model = self.module(*args, **kwargs)
         net = NeuralNetClassifierNoLog(
-            model.double(),
+            module = model.double(),
             criterion=nn.CrossEntropyLoss,
             optimizer=optim.Adam,
             optimizer__weight_decay=0,
@@ -414,3 +426,183 @@ def squeeze_final_output(x):
     if x.size()[2] == 1:
         x = x[:, :, 0]
     return x
+
+
+
+### ==============================添加内容=============================== ###
+class Conv1dWithConstraint(nn.Conv1d):
+    '''
+    Lawhern V J, Solon A J, Waytowich N R, et al. EEGNet: a compact convolutional neural network for EEG-based brain–computer interfaces[J]. Journal of neural engineering, 2018, 15(5): 056013.
+    '''
+
+    def __init__(self, *args, doWeightNorm=True, max_norm=1, **kwargs):
+        self.max_norm = max_norm
+        self.doWeightNorm = doWeightNorm
+        super(Conv1dWithConstraint, self).__init__(*args, **kwargs)
+        if self.bias:
+            self.bias.data.fill_(0.0)
+
+    def forward(self, x):
+        if self.doWeightNorm:
+            self.weight.data = torch.renorm(
+                self.weight.data, p=2, dim=0, maxnorm=self.max_norm
+            )
+        return super(Conv1dWithConstraint, self).forward(x)
+
+
+class Conv2dWithConstraint(nn.Conv2d):
+    '''
+    Lawhern V J, Solon A J, Waytowich N R, et al. EEGNet: a compact convolutional neural network for EEG-based brain–computer interfaces[J]. Journal of neural engineering, 2018, 15(5): 056013.
+    '''
+
+    def __init__(self, *args, doWeightNorm=True, max_norm=1, **kwargs):
+        self.max_norm = max_norm
+        self.doWeightNorm = doWeightNorm
+        super(Conv2dWithConstraint, self).__init__(*args, **kwargs)
+        # if self.bias:
+        #     self.bias.data.fill_(0.0)
+
+    def forward(self, x):
+        if self.doWeightNorm:
+            self.weight.data = torch.renorm(
+                self.weight.data, p=2, dim=0, maxnorm=self.max_norm
+            )
+        return super(Conv2dWithConstraint, self).forward(x)
+
+    def __call__(self, *input, **kwargs):
+        return super()._call_impl(*input, **kwargs)
+
+
+class LinearWithConstraint(nn.Linear):
+    def __init__(self, *args, doWeightNorm=True, max_norm=1, **kwargs):
+        self.max_norm = max_norm
+        self.doWeightNorm = doWeightNorm
+        super(LinearWithConstraint, self).__init__(*args, **kwargs)
+        if self.bias is not None:
+            self.bias.data.fill_(0.0)
+
+    def forward(self, x):
+        if self.doWeightNorm:
+            self.weight.data = torch.renorm(
+                self.weight.data, p=2, dim=0, maxnorm=self.max_norm
+            )
+        return super(LinearWithConstraint, self).forward(x)
+
+
+class Chomp1d(nn.Module):
+    def __init__(self, chomp_size):
+        super(Chomp1d, self).__init__()
+        self.chomp_size = chomp_size
+
+    def forward(self, x):
+        return x[:, :, :-self.chomp_size].contiguous()
+
+
+class TemporalBlock(nn.Module):
+    def __init__(self, n_inputs, n_outputs, kernel_size, stride, dilation, padding, dropout=0.2, bias=False, WeightNorm=False, group=False, max_norm=1.):
+        super(TemporalBlock, self).__init__()
+        if group:
+            if n_inputs >= n_outputs:
+                self.conv1 = Conv1dWithConstraint(n_inputs, n_outputs, kernel_size, stride=stride, padding=padding,
+                                                  dilation=dilation, bias=bias, doWeightNorm=WeightNorm, max_norm=max_norm, groups=n_outputs)
+            else:
+                self.conv1 = Conv1dWithConstraint(n_inputs, n_outputs, kernel_size, stride=stride, padding=padding,
+                                                  dilation=dilation, bias=bias, doWeightNorm=WeightNorm, max_norm=max_norm, groups=n_inputs)
+            self.conv1_point = Conv1dWithConstraint(n_outputs, n_outputs, kernel_size=1, stride=1, bias=bias)
+        else:
+            self.conv1 = Conv1dWithConstraint(n_inputs, n_outputs, kernel_size, stride=stride, padding=padding,
+                                              dilation=dilation, bias=bias, doWeightNorm=WeightNorm, max_norm=max_norm)
+        self.chomp1 = Chomp1d(padding)
+        self.bn1 = nn.BatchNorm1d(num_features=n_outputs)
+        self.relu1 = nn.ELU() # inplace=True
+        self.dropout1 = nn.Dropout(dropout)
+
+        if group:
+            self.conv2 = Conv1dWithConstraint(n_outputs, n_outputs, kernel_size, stride=stride, padding=padding,
+                                              dilation=dilation, bias=bias, doWeightNorm=WeightNorm, max_norm=max_norm, groups=n_outputs)
+            self.conv2_point = Conv1dWithConstraint(n_outputs, n_outputs, kernel_size=1, stride=1, bias=bias)
+        else:
+            self.conv2 = Conv1dWithConstraint(n_outputs, n_outputs, kernel_size, stride=stride, padding=padding,
+                                              dilation=dilation, bias=bias, doWeightNorm=WeightNorm, max_norm=max_norm)
+        self.chomp2 = Chomp1d(padding)
+        self.bn2 = nn.BatchNorm1d(num_features=n_outputs)
+        self.relu2 = nn.ELU()
+        self.dropout2 = nn.Dropout(dropout)
+
+        if group:
+            self.net = nn.Sequential(self.conv1, self.conv1_point, self.chomp1, self.bn1, self.relu1, self.dropout1,
+                                     self.conv2, self.conv2_point, self.chomp2, self.bn2, self.relu2, self.dropout2)
+        else:
+            self.net = nn.Sequential(self.conv1, self.chomp1, self.bn1, self.relu1, self.dropout1,
+                                     self.conv2, self.chomp2, self.bn2, self.relu2, self.dropout2)
+        self.downsample = nn.Conv1d(n_inputs, n_outputs, 1) if n_inputs != n_outputs else None
+        self.relu = nn.ELU()
+
+    def forward(self, x):
+        out = self.net(x)
+        res = x if self.downsample is None else self.downsample(x)
+        out = out+res
+        out = self.relu(out)
+        return out
+
+
+class TemporalConvNet(nn.Module):
+    """A Temporal Convolutional Network (TCN) for processing sequential data.
+
+    This class implements a TCN architecture, stacking multiple TemporalBlock layers
+    with increasing dilation factors to capture long-range dependencies in sequential
+    data, such as EEG signals in brain-computer interface (BCI) tasks. It supports
+    customizable input channels, output channels, kernel size, dropout, and normalization.
+
+    author: Guangjin Liang <3330635482@qq.com>
+
+    Created on: 2025-05-21
+
+    update log:
+        2025-05-21 by Guangjin Liang <3330635482@qq.com>: Initial implementation.
+
+    Parameters
+    ----------
+    num_inputs : int
+        Number of input channels (e.g., number of EEG features).
+    num_channels : list of int
+        List of output channels for each TemporalBlock layer.
+    kernel_size : int, optional
+        Kernel size for the convolutional layers in TemporalBlock (default: 2).
+    dropout : float, optional
+        Dropout rate for regularization in TemporalBlock (default: 0.2).
+    bias : bool, optional
+        Whether to include bias terms in the convolutional layers (default: False).
+    WeightNorm : bool, optional
+        Whether to apply weight normalization to the convolutional layers (default: False).
+    group : bool, optional
+        Whether to apply group convolution in TemporalBlock (default: True).
+    max_norm : float, optional
+        Maximum norm constraint for the convolutional weights (default: 1.0).
+
+    Attributes
+    ----------
+    network : torch.nn.Sequential
+        A sequential container of TemporalBlock layers forming the TCN.
+
+    Methods
+    -------
+    forward(x: torch.Tensor):
+        Perform forward pass through the TCN.
+    """
+    def __init__(self, num_inputs, num_channels, kernel_size=2, dropout=0.2, bias=False, WeightNorm=False, group=False, max_norm=1.):
+        super(TemporalConvNet, self).__init__()
+        layers = []
+        num_levels = len(num_channels)
+        for i in range(num_levels):
+            dilation_size = 2 ** i
+            in_channels = num_inputs if i == 0 else num_channels[i-1]
+            out_channels = num_channels[i]
+            layers += [TemporalBlock(in_channels, out_channels, kernel_size, stride=1, dilation=dilation_size, padding=(kernel_size-1) * dilation_size,
+                                     dropout=dropout, bias=bias, WeightNorm=WeightNorm, group=group, max_norm=max_norm)]
+
+        self.network = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.network(x)
+### ==============================添加内容=============================== ###

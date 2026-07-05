@@ -24,11 +24,13 @@ scikit-learn
 pooch
 torch>=1.7.1
 skorch
+einops==0.8.1
 autograd
 pymanopt>=2.0
 
 # ============== brainflow (signal acquisition) ==============
 pylsl
+keyboard==0.13.5
 
 # ============== brainstim (stimulus presentation) ==============
 # Note: psychopy may have platform-specific installation requirements

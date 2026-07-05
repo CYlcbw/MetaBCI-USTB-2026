@@ -6,6 +6,9 @@ from metabci.brainstim.paradigm import (
     SSVEP,
     P300,
     MI,
+    ### ==============================添加内容=============================== ###
+    MI4C,
+    ### ==============================添加内容=============================== ###
     AVEP,
     SSAVEP,
     paradigm,
@@ -269,6 +272,76 @@ if __name__ == "__main__":
         lsl_source_id=lsl_source_id,
         online=online,
     )
+
+    ### ==============================添加内容=============================== ###
+    """
+    MI4C
+    """
+    fps = 60  # 屏幕刷新率
+    text_pos = (0.0, 0.0)  # 提示文本位置
+
+    # 四类位置
+    left_pos = [[-480, 0.0]]  # 左手
+    right_pos = [[480, 0.0]]  # 右手
+    feet_pos = [[0.0, -270]]  # 脚（下方）
+    both_pos = [[0.0, 270]]  # 双手（上方）
+
+    tex_color = 2 * np.array([179, 45, 0]) / 255 - 1  # 提示文本颜色
+    normal_color = [[-0.8, -0.8, -0.8]]  # 默认颜色
+    image_color = [[1, 1, 1]]  # 提示或开始想象颜色
+    symbol_height = 100
+    n_Elements = 1
+    stim_length = 288
+    stim_width = 288
+
+    mi4c = MI4C(win=win)
+
+    mi4c.config_color(
+        refresh_rate=fps,
+        text_pos=text_pos,
+        left_pos=left_pos,
+        right_pos=right_pos,
+        feet_pos=feet_pos,
+        both_pos=both_pos,
+        tex_color=tex_color,
+        normal_color=normal_color,
+        image_color=image_color,
+        symbol_height=symbol_height,
+        n_Elements=n_Elements,
+        stim_length=stim_length,
+        stim_width=stim_width,
+    )
+    mi4c.config_response()
+
+    bg_color = np.array([-1, -1, -1])
+    display_time = 1
+    index_time = 2
+    rest_time = 1
+    image_time = 4
+    response_time = 2
+    port_addr = ("127.0.0.1", 12350)
+    nrep = 15
+    lsl_source_id = "meta_online_worker"
+    online = False
+
+    ex.register_paradigm(
+        "MI4C",
+        paradigm,
+        VSObject=mi4c,
+        bg_color=bg_color,
+        display_time=display_time,
+        index_time=index_time,
+        rest_time=rest_time,
+        response_time=response_time,
+        image_time=image_time,
+        port_addr=port_addr,
+        nrep=nrep,
+        pdim="mi4c",
+        lsl_source_id=lsl_source_id,
+        online=online,
+        device_type="OpenBCI GUI Port",
+    )
+    ### ==============================添加内容=============================== ###
 
     """
     连续反馈，不设定反馈显示时长，线程获取预测标签 con-SSVEP

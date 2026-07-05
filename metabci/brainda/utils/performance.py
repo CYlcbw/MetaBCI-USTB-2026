@@ -370,6 +370,108 @@ def _roc_auc(y_true: ndarray, y_score: ndarray, isdraw=False) -> ndarray:
     return auc
 
 
+### ==============================添加内容=============================== ###
+def _precision_count(y_true: ndarray, y_pred: ndarray) -> float:
+    """Precision score for multi-class classification
+
+    update log:
+        2025-05-21 by Guangjin Liang <3330635482@qq.com>, Add code annotation
+
+    Parameters
+    ----------
+    y_true : 1d array-like
+        Ground truth (correct) labels.
+    y_pred : 1d array-like
+        Predicted labels.
+
+    Returns
+    -------
+    precision: float
+        Macro-averaged precision score.
+    """
+    if y_true.size != y_pred.size:
+        raise ValueError(
+            """The size of the predicted label and the real label should be the same""")
+    precision = metrics.precision_score(y_true, y_pred, average='macro', zero_division=0)
+    return precision
+
+
+def _recall_count(y_true: ndarray, y_pred: ndarray) -> float:
+    """Recall score for multi-class classification
+
+    update log:
+        2025-05-21 by Guangjin Liang <3330635482@qq.com>, Add code annotation
+
+    Parameters
+    ----------
+    y_true : 1d array-like
+        Ground truth (correct) labels.
+    y_pred : 1d array-like
+        Predicted labels.
+
+    Returns
+    -------
+    recall: float
+        Macro-averaged recall score.
+    """
+    if y_true.size != y_pred.size:
+        raise ValueError(
+            """The size of the predicted label and the real label should be the same""")
+    recall = metrics.recall_score(y_true, y_pred, average='macro', zero_division=0)
+    return recall
+
+
+def _f1_count(y_true: ndarray, y_pred: ndarray) -> float:
+    """F1 score for multi-class classification
+
+    update log:
+        2025-05-21 by Guangjin Liang <3330635482@qq.com>, Add code annotation
+
+    Parameters
+    ----------
+    y_true : 1d array-like
+        Ground truth (correct) labels.
+    y_pred : 1d array-like
+        Predicted labels.
+
+    Returns
+    -------
+    f1: float
+        Macro-averaged F1 score.
+    """
+    if y_true.size != y_pred.size:
+        raise ValueError(
+            """The size of the predicted label and the real label should be the same""")
+    f1 = metrics.f1_score(y_true, y_pred, average='macro', zero_division=0)
+    return f1
+
+
+def _kappa_count(y_true: ndarray, y_pred: ndarray) -> float:
+    """Cohen's Kappa score for multi-class classification
+
+    update log:
+        2025-05-21 by Guangjin Liang <3330635482@qq.com>, Add code annotation
+
+    Parameters
+    ----------
+    y_true : 1d array-like
+        Ground truth (correct) labels.
+    y_pred : 1d array-like
+        Predicted labels.
+
+    Returns
+    -------
+    kappa: float
+        Cohen's Kappa score.
+    """
+    if y_true.size != y_pred.size:
+        raise ValueError(
+            """The size of the predicted label and the real label should be the same""")
+    kappa = metrics.cohen_kappa_score(y_true, y_pred)
+    return kappa
+### ==============================添加内容=============================== ###
+
+
 estimators = {
     "Acc": _accuracy,
     "bAcc": _balance_accuracy,
@@ -380,6 +482,12 @@ estimators = {
     "FPR": _fpr_count,
     "TNR": _tnr_count,
     "AUC": _roc_auc,
+### ==============================添加内容=============================== ###
+    "Precision": _precision_count,
+    "Recall": _recall_count,
+    "F1": _f1_count,
+    "Kappa": _kappa_count,
+### ==============================添加内容=============================== ###
 }
 
 
@@ -417,6 +525,7 @@ class Performance(BaseEstimator, TransformerMixin):
 
     update log:
         2023-12-10 by Leyi Jia <18020095036@163.com>, Add code annotation
+        2025-05-21 by Guangjin Liang <3330635482@qq.com>, Add code annotation
 
     Parameters
     ----------
@@ -435,6 +544,10 @@ class Performance(BaseEstimator, TransformerMixin):
             `FPR`: false positive rate (FPR).\n
             `TNR`: true negative rate (TNR).\n
             `AUC`: Area under the curve.\n
+            `Precision`: macro-averaged precision score.\n
+            `Recall`: macro-averaged recall score.\n
+            `F1`: macro-averaged F1 score.\n
+            `Kappa`: Cohen's Kappa score.\n
     isdraw : bool
         Whether to draw the ROC curve.
 
@@ -451,6 +564,10 @@ class Performance(BaseEstimator, TransformerMixin):
             `FPR`: false positive rate (FPR).\n
             `TNR`: true negative rate (TNR).\n
             `AUC`: Area under the curve.\n
+            `Precision`: macro-averaged precision score.\n
+            `Recall`: macro-averaged recall score.\n
+            `F1`: macro-averaged F1 score.\n
+            `Kappa`: Cohen's Kappa score.\n
     Tw : float
         Signal duration (in second).
     Ts : float
@@ -490,6 +607,7 @@ class Performance(BaseEstimator, TransformerMixin):
 
         update log:
             2023-12-10 by Leyi Jia <18020095036@163.com>, Add code annotation
+            2025-05-20 by Guangjin Liang <3330635482@qq.com>, Add code annotation
 
         Parameters
         ----------
@@ -517,7 +635,9 @@ class Performance(BaseEstimator, TransformerMixin):
             est = _check_est(estimator)
 
             # count metrics
-            if estimator in ["Acc", "bAcc", "TPR", "FNR", " FPR", "TNR"]:
+### ==============================修改内容=============================== ###
+            if estimator in ["Acc", "bAcc", "TPR", "FNR", " FPR", "TNR", "Precision", "Recall", "F1", "Kappa"]:
+### ==============================修改内容=============================== ###
                 res = est(y_true, y_pred)
             elif estimator == "tITR":
                 res = est(y_true, y_pred, Tw=self.Tw)

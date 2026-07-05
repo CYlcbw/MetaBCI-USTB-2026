@@ -10,7 +10,12 @@ from math import pi
 from psychopy import data, visual, event
 from psychopy.visual.circle import Circle
 from pylsl import StreamInlet, resolve_byprop  # type: ignore
-from .utils import NeuroScanPort, NeuraclePort, _check_array_like
+from .utils import (
+    NeuroScanPort,
+    NeuraclePort,
+    OpenBCIPort,
+    _check_array_like,
+)
 import threading
 from copy import copy
 import random
@@ -945,8 +950,6 @@ class P300(VisualStim):
 
 
 # standard MI paradigm
-
-
 class MI(VisualStim):
     """
     Create MI stimuli.
@@ -1099,7 +1102,6 @@ class MI(VisualStim):
                 The length of left and right hand stimulation
             stim_width=162: float
                 The width of left and right hand stimulation.
-
         """
 
         self.n_Elements = n_Elements
@@ -1215,9 +1217,381 @@ class MI(VisualStim):
         )
 
 
+
+### ==============================添加内容=============================== ###
+# standard MI paradigm
+class MI4C(VisualStim):
+    """
+    Create MI4C stimuli.
+
+    The subclass MI4C inherits from the parent class VisualStim, and duplicate properties are no longer listed.
+
+    author: Wei Zhao
+
+    Created on: 2022-06-30
+
+    update log:
+        2025-06-11 by Guangjin Liang <3330635482@qq.com>: Initial implementation.
+
+    Parameters
+    ----------
+        win:
+            The window object.
+        colorspace: str
+            The color space, default to rgb.
+        allowGUI: bool
+            Defaults to True, which allows frame-by-frame drawing and key-exit.
+
+    Attributes
+    ----------
+        tex_left: str
+            Obtain the image path for left hand stimulation.
+        tex_right: str
+            Obtain the image path for right hand stimulation.
+        tex_feet: str
+            Obtain the image path for feet stimulation.
+        tex_both: str
+            Obtain the image path for both hand stimulation.
+        left_pos: list, shape(x, y)
+            The position of left hand stimulation. Only exists in config_color().
+        right_pos: list, shape(x, y)
+            The position of right hand stimulation. Only exists in config_color().
+        tex_left: str
+            Obtain the image path for left hand stimulation. Only exists in config_color().
+        refresh_rate: int
+            The refresh rate of the screen. Only exists in config_color().
+        text_stimulus: object
+            Stimulus text, display "start" on the screen. Only exists in config_color().
+        image_left_stimuli: object
+            Left hand stimulation image, with colors indicating or starting to imagine.
+            Only exists in config_color().
+        image_right_stimuli: object
+            Stimulate the image with the right hand, with colors indicating or starting to imagine.
+            Only exists in config_color().
+        normal_left_stimuli: object
+            Left hand stimulation image, default color. Only exists in config_color().
+        normal_right_stimuli: object
+            Right hand stimulation image, default color. Only exists in config_color().
+        response_left_stimuli: object
+            Left hand stimulation image, color for online feedback. Only exists in config_color().
+        response_right_stimuli: object
+            Right hand stimulation image, color for online feedback. Only exists in config_color().
+
+    Tip
+    ----
+    .. code-block:: python
+        :caption: An example of creating MI stimuli.
+
+        from psychopy import monitors
+        import numpy as np
+        from brainstim.framework import Experiment
+        from brainstim.paradigm import MI,paradigm
+
+        win = ex.get_window()
+
+        # press q to exit paradigm interface
+        fps = 120                                                   # Screen refresh rate
+        text_pos = (0.0, 0.0)                                       # Prompt text position
+        left_pos = [[-480, 0.0]]                                    # Left hand position
+        right_pos = [[480, 0.0]]                                    # Right hand position
+        feet_pos = [[0.0, -270]]                                    # Feet position
+        both_pos = [[0.0, 270]]                                     # Both hand position
+        tex_color = 2*np.array([179, 45, 0])/255-1                  # Prompt text color
+        normal_color = [[-0.8,-0.8,-0.8]]                           # Default color
+        image_color = [[1,1,1]]
+        symbol_height = 100
+        n_Elements = 1                                              # One on each hand
+        stim_length = 288                                           # Length
+        stim_width = 288                                            # Width
+        basic_MI = MI(win=win)
+        basic_MI.config_color(refresh_rate=fps, text_pos=text_pos, left_pos=left_pos, right_pos=right_pos, .
+            tex_color=tex_color, normal_color=normal_color, image_color=image_color, symbol_height=symbol_height,
+            n_Elements=n_Elements, stim_length=stim_length, stim_width=stim_width)
+        basic_MI.config_response()
+        bg_color = np.array([-1, -1, -1])                           # Background color
+        display_time = 1
+        index_time = 1
+        rest_time = 1
+        image_time = 4
+        response_time = 2
+        port_addr = None
+        nrep = 10
+        lsl_source_id =  None
+        online = False
+        ex.register_paradigm('basic MI', paradigm, VSObject=basic_MI, bg_color=bg_color, display_time=display_time,
+            index_time=index_time, rest_time=rest_time, response_time=response_time, port_addr=port_addr,
+            nrep=nrep, image_time=image_time, pdim='mi',lsl_source_id=lsl_source_id, online=online)
+    """
+    def __init__(self, win, colorSpace="rgb", allowGUI=True):
+        super().__init__(win=win, colorSpace=colorSpace, allowGUI=allowGUI)
+
+        self.tex_left = os.path.join(
+            os.path.abspath(os.path.dirname(os.path.abspath(__file__))),
+            "textures" + os.sep + "left_hand.jpeg",
+        )
+        self.tex_right = os.path.join(
+            os.path.abspath(os.path.dirname(os.path.abspath(__file__))),
+            "textures" + os.sep + "right_hand.jpeg",
+        )
+        self.tex_feet = os.path.join(
+            os.path.abspath(os.path.dirname(os.path.abspath(__file__))),
+            "textures" + os.sep + "feet.jpeg",
+        )
+        self.tex_both = os.path.join(
+            os.path.abspath(os.path.dirname(os.path.abspath(__file__))),
+            "textures" + os.sep + "both_hands.jpeg",
+        )
+
+    def config_color(
+        self,
+        refresh_rate=60,
+        text_pos=(0.0, 0.0),
+        left_pos=[[-480, 0.0]],
+        right_pos=[[480, 0.0]],
+        feet_pos=[[0.0, -270]],
+        both_pos=[[0.0, 270]],
+        tex_color=(1, -1, -1),
+        normal_color=[[-0.8, -0.8, 0.8]],
+        image_color=[[1, 1, 1]],
+        symbol_height=100,
+        n_Elements=1,
+        stim_length=288,
+        stim_width=162,
+    ):
+        """Config color of stimuli.
+
+        Parameters
+        ----------
+            refresh_rate: int
+                Refresh rate of screen.
+            text_pos: ndarray, shape(x, y)
+                The position of the prompt text ("start").
+            left_pos: ndarray, shape(x, y)
+                The position of left hand stimulation.
+            right_pos: ndarray, shape(x, y)
+                The position of right hand stimulation.
+            feet_pos: ndarray, shape(x, y)
+                The position of feet stimulation.
+            both_pos: ndarray, shape(x, y)
+                The position of both hand stimulation.
+            tex_color: ndarray, shape(red, green, blue)
+               The color of the stimulating text, ranging from -1.0 to 1.0.
+            normal_color: ndarray, shape(red, green, blue)
+                The stimulating color during rest.
+            image_color: ndarray, shape(red, green, blue)
+                The stimulating color during imaging.
+            symbol_height: float
+                The height of the prompt text.
+            n_Elements: int
+                The number of left and right hand stimuli.
+            stim_length: float
+                The length of left and right hand stimulation
+            stim_width=162: float
+                The width of left and right hand stimulation.
+        """
+
+        self.n_Elements = n_Elements
+        self.stim_length = stim_length
+        self.stim_width = stim_width
+        self.left_pos = left_pos
+        self.right_pos = right_pos
+        self.feet_pos = feet_pos
+        self.both_pos = both_pos
+        self.refresh_rate = refresh_rate
+        if refresh_rate == 0:
+            refresh_rate = np.floor(
+                self.win.getActualFrameRate(nIdentical=20, nWarmUpFrames=20)
+            )
+
+        if symbol_height == 0:
+            symbol_height = int(self.win_size[1] / 6)
+        self.text_stimulus = visual.TextStim(
+            self.win,
+            text="start",
+            font="Times New Roman",
+            pos=text_pos,
+            color=tex_color,
+            units="pix",
+            height=symbol_height,
+            bold=True,
+        )
+
+        self.image_left_stimuli = visual.ElementArrayStim(
+            self.win,
+            units="pix",
+            elementTex=self.tex_left,
+            elementMask=None,
+            texRes=2,
+            nElements=n_Elements,
+            sizes=[[stim_length, stim_width]],
+            xys=np.array(left_pos),
+            oris=[0],
+            colors=np.array(image_color),
+            opacities=[1],
+            contrs=[-1],
+        )
+        self.image_right_stimuli = visual.ElementArrayStim(
+            self.win,
+            units="pix",
+            elementTex=self.tex_right,
+            elementMask=None,
+            texRes=2,
+            nElements=n_Elements,
+            sizes=[[stim_length, stim_width]],
+            xys=np.array(right_pos),
+            oris=[0],
+            colors=np.array(image_color),
+            opacities=[1],
+            contrs=[-1],
+        )
+        self.image_feet_stimuli = visual.ElementArrayStim(
+            self.win,
+            units="pix",
+            elementTex=self.tex_feet,
+            elementMask=None,
+            texRes=2,
+            nElements=n_Elements,
+            sizes=[[stim_length, stim_width]],
+            xys=np.array(feet_pos),
+            oris=[0],
+            colors=np.array(image_color),
+            opacities=[1],
+            contrs=[-1],
+        )
+        self.image_both_stimuli = visual.ElementArrayStim(
+            self.win,
+            units="pix",
+            elementTex=self.tex_both,
+            elementMask=None,
+            texRes=2,
+            nElements=n_Elements,
+            sizes=[[stim_length, stim_width]],
+            xys=np.array(both_pos),
+            oris=[0],
+            colors=np.array(image_color),
+            opacities=[1],
+            contrs=[-1],
+        )
+
+        self.normal_left_stimuli = visual.ElementArrayStim(
+            self.win,
+            units="pix",
+            elementTex=self.tex_left,
+            elementMask=None,
+            texRes=2,
+            nElements=n_Elements,
+            sizes=[[stim_length, stim_width]],
+            xys=np.array(left_pos),
+            oris=[0],
+            colors=np.array(normal_color),
+            opacities=[1],
+            contrs=[-1],
+        )
+        self.normal_right_stimuli = visual.ElementArrayStim(
+            self.win,
+            units="pix",
+            elementTex=self.tex_right,
+            elementMask=None,
+            texRes=2,
+            nElements=n_Elements,
+            sizes=[[stim_length, stim_width]],
+            xys=np.array(right_pos),
+            oris=[0],
+            colors=np.array(normal_color),
+            opacities=[1],
+            contrs=[-1],
+        )
+        self.normal_feet_stimuli = visual.ElementArrayStim(
+            self.win,
+            units="pix",
+            elementTex=self.tex_feet,
+            elementMask=None,
+            texRes=2,
+            nElements=n_Elements,
+            sizes=[[stim_length, stim_width]],
+            xys=np.array(feet_pos),
+            oris=[0],
+            colors=np.array(normal_color),
+            opacities=[1],
+            contrs=[-1],
+        )
+        self.normal_both_stimuli = visual.ElementArrayStim(
+            self.win,
+            units="pix",
+            elementTex=self.tex_both,
+            elementMask=None,
+            texRes=2,
+            nElements=n_Elements,
+            sizes=[[stim_length, stim_width]],
+            xys=np.array(both_pos),
+            oris=[0],
+            colors=np.array(normal_color),
+            opacities=[1],
+            contrs=[-1],
+        )
+
+    def config_response(self, response_color=[[-0.5, 0.9, 0.5]]):
+        self.response_left_stimuli = visual.ElementArrayStim(
+            self.win,
+            units="pix",
+            elementTex=self.tex_left,
+            elementMask=None,
+            texRes=2,
+            nElements=self.n_Elements,
+            sizes=[[self.stim_length, self.stim_width]],
+            xys=np.array(self.left_pos),
+            oris=[0],
+            colors=np.array(response_color),
+            opacities=[1],
+            contrs=[-1],
+        )
+        self.response_right_stimuli = visual.ElementArrayStim(
+            self.win,
+            units="pix",
+            elementTex=self.tex_right,
+            elementMask=None,
+            texRes=2,
+            nElements=self.n_Elements,
+            sizes=[[self.stim_length, self.stim_width]],
+            xys=np.array(self.right_pos),
+            oris=[0],
+            colors=np.array(response_color),
+            opacities=[1],
+            contrs=[-1],
+        )
+        self.response_feet_stimuli = visual.ElementArrayStim(
+            self.win,
+            units="pix",
+            elementTex=self.tex_feet,
+            elementMask=None,
+            texRes=2,
+            nElements=self.n_Elements,
+            sizes=[[self.stim_length, self.stim_width]],
+            xys=np.array(self.feet_pos),
+            oris=[0],
+            colors=np.array(response_color),
+            opacities=[1],
+            contrs=[-1],
+        )
+        self.response_both_stimuli = visual.ElementArrayStim(
+            self.win,
+            units="pix",
+            elementTex=self.tex_both,
+            elementMask=None,
+            texRes=2,
+            nElements=self.n_Elements,
+            sizes=[[self.stim_length, self.stim_width]],
+            xys=np.array(self.both_pos),
+            oris=[0],
+            colors=np.array(response_color),
+            opacities=[1],
+            contrs=[-1],
+        )
+### ==============================添加内容=============================== ###
+
+
+
 # standard AVEP paradigm
-
-
 class AVEP(VisualStim):
     """Create AVEP stimuli.
 
@@ -2438,7 +2812,7 @@ def paradigm(
     lsl_source_id=None,
     online=None,
     device_type="NeuroScan",
-):
+    ):
     """
     The classical paradigm is implemented, the task flow is defined, the ' q '
     exit paradigm is clicked, and the start selection interface is returned.
@@ -2501,9 +2875,29 @@ def paradigm(
     fps = VSObject.refresh_rate
 
     if device_type == "NeuroScan":
-        port = NeuroScanPort(port_addr, use_serial=True) if port_addr else None
+        ### ==============================修改内容=============================== ###
+        port = NeuroScanPort(port_addr, use_serial=False) if port_addr else None
+        ### ==============================修改内容=============================== ###
     elif device_type == "Neuracle":
         port = NeuraclePort(port_addr) if port_addr else None
+    elif device_type == "OpenBCI":
+        port = OpenBCIPort(port_addr, target="gui") if port_addr else None
+    elif device_type in (
+        "OpenBCI GUI Port",
+        "OpenBCI_GUI",
+        "OpenBCIGUI",
+    ):
+        port = OpenBCIPort(port_addr, target="gui") if port_addr else None
+    elif device_type in (
+        "OpenBCI MetaBCI LSL Port",
+        "OpenBCI_MetaBCI_LSL",
+    ):
+        port = OpenBCIPort(port_addr, target="lsl")
+    elif device_type in (
+        "OpenBCI GUI MetaBCI Port",
+        "OpenBCI_GUI_MetaBCI",
+    ):
+        port = OpenBCIPort(port_addr, target="both")
     else:
         raise KeyError(
             "Unknown device type: {}, please check your input".format(device_type))
@@ -2978,19 +3372,185 @@ def paradigm(
                     iframe += 1
                     win.flip()
 
+
+    ### ==============================添加内容=============================== ###
+    elif pdim == "mi4c":
+        # config experiment settings（扩展为四类）
+        conditions = [
+            {"id": 0, "name": "left_hand"},
+            {"id": 1, "name": "right_hand"},
+            {"id": 2, "name": "feet"},
+            {"id": 3, "name": "both_hands"},
+        ]
+        trials = data.TrialHandler(
+            conditions,
+            nrep,
+            name="experiment",
+            method="random")
+
+        # start routine
+        iframe = 0
+        while iframe < int(fps * display_time):
+            VSObject.normal_left_stimuli.draw()
+            VSObject.normal_right_stimuli.draw()
+            VSObject.normal_feet_stimuli.draw()       # 新增normal feet
+            VSObject.normal_both_stimuli.draw()       # 新增normal both_hands
+            iframe += 1
+            win.flip()
+
+        # episode 2: begin to flash
+        if port:
+            port.setData(0)
+        for trial in trials:
+            # quit demo
+            keys = event.getKeys(["q"])
+            if "q" in keys:
+                break
+
+            # initialise index position（新加支持4类判断）
+            id = int(trial["id"])
+            if id == 0:
+                image_stimuli = [VSObject.image_left_stimuli]
+                normal_stimuli = [
+                    VSObject.normal_right_stimuli,
+                    VSObject.normal_feet_stimuli,
+                    VSObject.normal_both_stimuli
+                ]
+            elif id == 1:
+                image_stimuli = [VSObject.image_right_stimuli]
+                normal_stimuli = [
+                    VSObject.normal_left_stimuli,
+                    VSObject.normal_feet_stimuli,
+                    VSObject.normal_both_stimuli
+                ]
+            elif id == 2:
+                image_stimuli = [VSObject.image_feet_stimuli]  # 新增feet类别
+                normal_stimuli = [
+                    VSObject.normal_left_stimuli,
+                    VSObject.normal_right_stimuli,
+                    VSObject.normal_both_stimuli
+                ]
+            elif id == 3:
+                image_stimuli = [VSObject.image_both_stimuli]  # 新增both_hands类别
+                normal_stimuli = [
+                    VSObject.normal_left_stimuli,
+                    VSObject.normal_right_stimuli,
+                    VSObject.normal_feet_stimuli
+                ]
+            else:
+                image_stimuli = [
+                    VSObject.image_both_stimuli,
+                    VSObject.normal_left_stimuli,
+                    VSObject.normal_right_stimuli,
+                    VSObject.normal_feet_stimuli
+                ]
+                normal_stimuli = []
+
+            # phase I: rest state
+            if rest_time != 0:
+                iframe = 0
+                while iframe < int(fps * rest_time):
+                    VSObject.normal_left_stimuli.draw()
+                    VSObject.normal_right_stimuli.draw()
+                    VSObject.normal_feet_stimuli.draw()
+                    VSObject.normal_both_stimuli.draw()
+                    iframe += 1
+                    win.flip()
+
+            # phase II: speller & index (eye shifting)
+            iframe = 0
+            while iframe < int(fps * index_time):
+                for _image_stimuli in image_stimuli:
+                    _image_stimuli.draw()
+                if normal_stimuli:
+                    for _normal_stimuli in normal_stimuli:
+                        _normal_stimuli.draw()
+                iframe += 1
+                win.flip()
+
+            # phase III: target stimulating
+            iframe = 0
+            while iframe < int(fps * image_time):
+                if iframe == 0 and port and online:
+                    VSObject.win.callOnFlip(port.setData, id + 1)
+                elif iframe == 0 and port:
+                    VSObject.win.callOnFlip(port.setData, id + 1)
+                if iframe == port_frame and port:
+                    port.setData(0)
+                VSObject.text_stimulus.draw()
+                for _image_stimuli in image_stimuli:
+                    _image_stimuli.draw()
+                if normal_stimuli:
+                    for _normal_stimuli in normal_stimuli:
+                        _normal_stimuli.draw()
+                iframe += 1
+                win.flip()
+
+            # phase IV: respond（新增feet和both_hands响应）
+            if inlet:
+                VSObject.normal_left_stimuli.draw()
+                VSObject.normal_right_stimuli.draw()
+                VSObject.normal_feet_stimuli.draw()
+                VSObject.normal_both_stimuli.draw()
+                win.flip()
+
+                samples, timestamp = inlet.pull_sample()
+                predict_id = int(samples[0]) - 1  # online predict id
+
+                if predict_id == 0:
+                    response_stimuli = [VSObject.response_left_stimuli]
+                    normal_stimuli = [
+                        VSObject.normal_right_stimuli,
+                        VSObject.normal_feet_stimuli,
+                        VSObject.normal_both_stimuli
+                    ]
+                elif predict_id == 1:
+                    response_stimuli = [VSObject.response_right_stimuli]
+                    normal_stimuli = [
+                        VSObject.normal_left_stimuli,
+                        VSObject.normal_feet_stimuli,
+                        VSObject.normal_both_stimuli
+                    ]
+                elif predict_id == 2:
+                    response_stimuli = [VSObject.response_feet_stimuli]
+                    normal_stimuli = [
+                        VSObject.normal_left_stimuli,
+                        VSObject.normal_right_stimuli,
+                        VSObject.normal_both_stimuli
+                    ]
+                elif predict_id == 3:
+                    response_stimuli = [VSObject.response_both_stimuli]
+                    normal_stimuli = [
+                        VSObject.normal_left_stimuli,
+                        VSObject.normal_right_stimuli,
+                        VSObject.normal_feet_stimuli
+                    ]
+                else:
+                    response_stimuli = [
+                        VSObject.image_both_stimuli,
+                        VSObject.normal_left_stimuli,
+                        VSObject.normal_right_stimuli,
+                        VSObject.normal_feet_stimuli
+                    ]
+                    normal_stimuli = []
+
+                iframe = 0
+                while iframe < int(fps * response_time):
+                    for _response_stimuli in response_stimuli:
+                        _response_stimuli.draw()
+                    if normal_stimuli:
+                        for _normal_stimuli in normal_stimuli:
+                            _normal_stimuli.draw()
+                    iframe += 1
+                    win.flip()
+    ### ==============================添加内容=============================== ###
+
+
     elif pdim == "con-ssvep":
-        # Initialize global variables before using them
         global online_text_pos, online_symbol_text
-        online_text_pos = VSObject.reset_res_pos
-        online_symbol_text = VSObject.reset_res_text
 
         if inlet:
             MyTherad = GetPlabel_MyTherad(inlet)
-            # Pass necessary attributes to MyTherad instance
-            MyTherad.res_text_pos = VSObject.reset_res_pos
-            MyTherad.symbol_text = VSObject.reset_res_text
-            MyTherad.symbols = VSObject.symbols
-            MyTherad.symbol_height = VSObject.symbol_height
             MyTherad.feedbackThread()
 
         # config experiment settings

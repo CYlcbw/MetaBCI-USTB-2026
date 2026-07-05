@@ -49,6 +49,7 @@ brainda = [
     "pooch",
     "torch>=1.7.1",
     "skorch",
+    "einops==0.8.1",
     "autograd",
     "pymanopt>=2.0",
 ]
@@ -56,6 +57,7 @@ brainda = [
 # brainflow: signal acquisition
 brainflow = [
     "pylsl",
+    "keyboard==0.13.5",
 ]
 
 # brainstim: stimulus presentation
@@ -97,4 +99,5 @@ include = ["metabci*"]
 [tool.setuptools.package-data]
 "metabci.brainda.utils" = ["*.loc"]
 "metabci.brainstim" = ["*.dll"]
-"metabci.brainstim.textures" = ["*.png", "*.PNG"]
+"metabci.brainflow" = ["lib/*.dll"]
+"metabci.brainstim.textures" = ["*.png", "*.PNG", "*.jpg", "*.jpeg"]

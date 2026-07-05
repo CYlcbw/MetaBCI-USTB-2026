@@ -13,3 +13,9 @@ from .cbcic import CBCIC2019001, CBCIC2019004
 from .xu2018_minavep import Xu2018MinaVep
 from .cattan_P300 import Cattan_P300
 from .bids import matchingpennies
+from .ustb2026mi4c import (
+    USTB2025MI4C,
+    USTB2025MI4CBase8,
+    USTB2026MI4C,
+    USTB2026MI4CBase8,
+)

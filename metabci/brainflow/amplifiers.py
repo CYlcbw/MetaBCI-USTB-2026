@@ -11,6 +11,7 @@ from abc import abstractmethod
 from collections import deque
 from typing import List, Optional, Tuple, Dict, Any
 
+import numpy
 import numpy as np
 import pylsl
 import queue
@@ -992,6 +993,528 @@ class LSLapps():
 
     def stop_trans(self):
         self.stop()
+
+
+class OpenBCI(BaseAmplifier):
+    """OpenBCI GUI LSL adapter for MetaBCI.
+
+    This class is intentionally narrower than ``LSLapps``. It targets the
+    Wi-Fi + OpenBCI GUI workflow where the GUI owns the board connection and
+    publishes EEG as an LSL stream, for example ``obci_eeg1`` with
+    ``source_id=openbcigui``.
+
+    ``recv`` returns MetaBCI-shaped samples as ``[eeg_channels..., trigger]``.
+    The trigger column is zero-filled by default, can be read from a marker
+    channel inside the EEG stream via ``marker_channel``, or can be aligned
+    from a separate marker LSL stream via ``marker_stream_name``.
+    """
+
+    DEFAULT_STREAM_NAME = "obci_eeg1"
+    DEFAULT_STREAM_TYPE = "EEG"
+    DEFAULT_SOURCE_ID = "openbcigui"
+
+    def __init__(
+        self,
+        stream_name: Optional[str] = DEFAULT_STREAM_NAME,
+        stream_type: Optional[str] = DEFAULT_STREAM_TYPE,
+        source_id: Optional[str] = DEFAULT_SOURCE_ID,
+        timeout: float = 5.0,
+        max_buflen: int = 3,
+        pull_timeout: float = 0.1,
+        max_samples: int = 256,
+        eeg_channel_indices: Optional[List[int]] = None,
+        marker_channel: Optional[int] = None,
+        expected_channels: Optional[int] = None,
+        strict_channels: bool = False,
+        inlet: Optional[Any] = None,
+        lsl_info: Optional[Any] = None,
+        marker_stream_name: Optional[str] = None,
+        marker_stream_type: Optional[str] = None,
+        marker_stream_source_id: Optional[str] = None,
+        marker_timeout: Optional[float] = None,
+        marker_pull_timeout: float = 0.02,
+        marker_max_samples: int = 1024,
+        marker_delay: float = 0.05,
+        ignore_zero_markers: bool = True,
+    ):
+        super().__init__()
+        self.stream_name = stream_name
+        self.stream_type = stream_type
+        self.source_id = source_id
+        self.timeout = float(timeout)
+        self.max_buflen = int(max_buflen)
+        self.pull_timeout = float(pull_timeout)
+        self.max_samples = int(max_samples)
+        self.eeg_channel_indices = (
+            list(eeg_channel_indices)
+            if eeg_channel_indices is not None else None
+        )
+        self.marker_channel = marker_channel
+        self.expected_channels = expected_channels
+        self.strict_channels = strict_channels
+
+        self.inlet = inlet
+        self.lsl_info = lsl_info
+        self.stream_metadata = (
+            self._stream_info_to_dict(lsl_info) if lsl_info is not None else {}
+        )
+        self.channel_labels = (
+            self._stream_channel_labels(lsl_info) if lsl_info is not None else []
+        )
+        self.marker_stream_name = marker_stream_name
+        self.marker_stream_type = marker_stream_type
+        self.marker_stream_source_id = marker_stream_source_id
+        self.marker_timeout = float(marker_timeout if marker_timeout is not None else timeout)
+        self.marker_pull_timeout = float(marker_pull_timeout)
+        self.marker_max_samples = int(marker_max_samples)
+        self.marker_delay = float(marker_delay)
+        self.ignore_zero_markers = ignore_zero_markers
+        self.marker_inlet = None
+        self.marker_lsl_info = None
+        self.marker_stream_metadata = {}
+        self._marker_thread = None
+        self._marker_stop = threading.Event()
+        self._marker_lock = threading.Lock()
+        self._pending_lsl_markers = []
+        self._dropped_lsl_markers = 0
+        self._pending_samples = np.empty((0, 0), dtype=np.float64)
+        self._pending_timestamps = np.empty((0,), dtype=np.float64)
+        self.last_raw_chunk = np.empty((0, 0), dtype=np.float64)
+        self.last_timestamps = np.empty((0,), dtype=np.float64)
+        self.last_metabci_chunk = np.empty((0, 0), dtype=np.float64)
+        self._warned_expected_channels = False
+
+    @staticmethod
+    def _call_stream_info(info, name, default=None):
+        if info is None:
+            return default
+        method = getattr(info, name, None)
+        if method is None:
+            return default
+        try:
+            return method()
+        except Exception:
+            return default
+
+    @classmethod
+    def _stream_info_to_dict(cls, info):
+        if info is None:
+            return {}
+        return {
+            "name": cls._call_stream_info(info, "name", ""),
+            "type": cls._call_stream_info(info, "type", ""),
+            "channel_count": cls._call_stream_info(info, "channel_count", 0),
+            "nominal_srate": cls._call_stream_info(info, "nominal_srate", 0.0),
+            "channel_format": cls._call_stream_info(info, "channel_format", ""),
+            "source_id": cls._call_stream_info(info, "source_id", ""),
+            "uid": cls._call_stream_info(info, "uid", ""),
+            "hostname": cls._call_stream_info(info, "hostname", ""),
+        }
+
+    @staticmethod
+    def _stream_channel_labels(info):
+        labels = []
+        if info is None:
+            return labels
+        try:
+            channels = info.desc().child("channels")
+            channel = channels.child("channel")
+            while not channel.empty():
+                labels.append(
+                    channel.child_value("label")
+                    or channel.child_value("name")
+                    or channel.child_value("type")
+                    or ""
+                )
+                channel = channel.next_sibling()
+        except Exception:
+            return []
+        return labels
+
+    @classmethod
+    def list_streams(cls, timeout: float = 2.0):
+        return pylsl.resolve_streams(wait_time=timeout)
+
+    @classmethod
+    def describe_stream(cls, info):
+        metadata = cls._stream_info_to_dict(info)
+        metadata["channel_labels"] = cls._stream_channel_labels(info)
+        return metadata
+
+    def _resolve_by_name(self):
+        if not self.stream_name:
+            return []
+        resolver = getattr(pylsl, "resolve_byprop", None)
+        if resolver is not None:
+            return resolver(
+                "name", self.stream_name, minimum=1, timeout=self.timeout)
+        return pylsl.resolve_stream(
+            "name", self.stream_name, 1, self.timeout)
+
+    def _stream_matches(self, info):
+        if self.stream_type:
+            if self._call_stream_info(info, "type", "") != self.stream_type:
+                return False
+        if self.source_id:
+            if self._call_stream_info(info, "source_id", "") != self.source_id:
+                return False
+        return True
+
+    def _resolve_lsl_stream(self):
+        streams = self._resolve_by_name()
+        if streams:
+            preferred = [info for info in streams if self._stream_matches(info)]
+            return preferred[0] if preferred else streams[0]
+
+        streams = pylsl.resolve_streams(wait_time=self.timeout)
+        preferred = [info for info in streams if self._stream_matches(info)]
+        if preferred:
+            return preferred[0]
+        if self.source_id:
+            return None
+
+        if self.stream_type:
+            typed = [
+                info for info in streams
+                if self._call_stream_info(info, "type", "") == self.stream_type
+            ]
+            if typed:
+                return typed[0]
+        return streams[0] if streams else None
+
+    def connect_lsl(self):
+        """Resolve and open the OpenBCI GUI LSL stream."""
+
+        if self.inlet is not None:
+            return self.inlet
+        info = self._resolve_lsl_stream()
+        if info is None:
+            target = self.stream_name or self.source_id or self.stream_type
+            raise RuntimeError(
+                "No OpenBCI GUI LSL stream found for {!r} within {:.1f}s".
+                format(target, self.timeout))
+
+        self.lsl_info = info
+        self.stream_metadata = self._stream_info_to_dict(info)
+        self.channel_labels = self._stream_channel_labels(info)
+        self.inlet = pylsl.StreamInlet(
+            info,
+            max_buflen=self.max_buflen,
+            processing_flags=pylsl.proc_clocksync | pylsl.proc_dejitter,
+        )
+        return self.inlet
+
+    def _marker_stream_matches(self, info):
+        if self.marker_stream_type:
+            if self._call_stream_info(info, "type", "") != self.marker_stream_type:
+                return False
+        if self.marker_stream_source_id:
+            if self._call_stream_info(info, "source_id", "") != self.marker_stream_source_id:
+                return False
+        return True
+
+    def _resolve_marker_lsl_stream(self):
+        if not self.marker_stream_name:
+            return None
+        resolver = getattr(pylsl, "resolve_byprop", None)
+        if resolver is not None:
+            streams = resolver(
+                "name",
+                self.marker_stream_name,
+                minimum=1,
+                timeout=self.marker_timeout,
+            )
+        else:
+            streams = pylsl.resolve_stream(
+                "name", self.marker_stream_name, 1, self.marker_timeout)
+        if not streams:
+            return None
+        preferred = [
+            info for info in streams
+            if self._marker_stream_matches(info)
+        ]
+        return preferred[0] if preferred else streams[0]
+
+    def connect_marker_lsl(self):
+        """Resolve and open the optional marker LSL stream."""
+
+        if not self.marker_stream_name:
+            return None
+        if self.marker_inlet is not None:
+            return self.marker_inlet
+        info = self._resolve_marker_lsl_stream()
+        if info is None:
+            raise RuntimeError(
+                "No OpenBCI GUI marker LSL stream found for {!r} within {:.1f}s".
+                format(self.marker_stream_name, self.marker_timeout))
+        self.marker_lsl_info = info
+        self.marker_stream_metadata = self._stream_info_to_dict(info)
+        self.marker_inlet = pylsl.StreamInlet(
+            info,
+            max_buflen=self.max_buflen,
+            processing_flags=pylsl.proc_clocksync | pylsl.proc_dejitter,
+        )
+        return self.marker_inlet
+
+    def start_marker_lsl(self):
+        if not self.marker_stream_name:
+            return
+        self.connect_marker_lsl()
+        if self._marker_thread and self._marker_thread.is_alive():
+            return
+        self._marker_stop.clear()
+        self._marker_thread = threading.Thread(
+            target=self._marker_lsl_loop,
+            name="openbci_gui_marker_lsl_reader",
+            daemon=True,
+        )
+        self._marker_thread.start()
+
+    def stop_marker_lsl(self):
+        self._marker_stop.set()
+        if self._marker_thread and self._marker_thread.is_alive():
+            self._marker_thread.join(timeout=1.0)
+        self._marker_thread = None
+
+    def _marker_value_from_sample(self, sample):
+        if not sample:
+            return None
+        try:
+            return float(sample[0])
+        except (TypeError, ValueError):
+            return None
+
+    def _marker_lsl_loop(self):
+        while not self._marker_stop.is_set():
+            try:
+                chunk, timestamps = self.marker_inlet.pull_chunk(
+                    timeout=self.marker_pull_timeout,
+                    max_samples=self.marker_max_samples,
+                )
+            except Exception:
+                continue
+            if not chunk or not timestamps:
+                continue
+            markers = []
+            for sample, timestamp in zip(chunk, timestamps):
+                value = self._marker_value_from_sample(sample)
+                if value is None:
+                    continue
+                if self.ignore_zero_markers and value == 0.0:
+                    continue
+                markers.append((float(timestamp), value))
+            if markers:
+                with self._marker_lock:
+                    self._pending_lsl_markers.extend(markers)
+                    self._pending_lsl_markers.sort(key=lambda item: item[0])
+
+    def connect_tcp(self):
+        """Compatibility alias for MetaBCI demos that call connect_tcp."""
+
+        return self.connect_lsl()
+
+    def start_acq(self):
+        self.connect_lsl()
+        self.start_marker_lsl()
+
+    def stop_acq(self):
+        self.close_connection()
+
+    def start_trans(self):
+        self.start_acq()
+        time.sleep(1e-2)
+        self.start()
+
+    def stop_trans(self):
+        if hasattr(self, "_t_loop") and self._t_loop.is_alive():
+            self.stop()
+
+    def close_connection(self):
+        self.stop_marker_lsl()
+        if self.inlet is not None:
+            close_stream = getattr(self.inlet, "close_stream", None)
+            if close_stream is not None:
+                try:
+                    close_stream()
+                except Exception:
+                    pass
+        self.inlet = None
+        if self.marker_inlet is not None:
+            close_stream = getattr(self.marker_inlet, "close_stream", None)
+            if close_stream is not None:
+                try:
+                    close_stream()
+                except Exception:
+                    pass
+        self.marker_inlet = None
+
+    def pull_raw_chunk(self):
+        """Pull one raw LSL chunk and return ``(samples, timestamps)``."""
+
+        if self.inlet is None:
+            self.connect_lsl()
+        chunk, timestamps = self.inlet.pull_chunk(
+            timeout=self.pull_timeout,
+            max_samples=self.max_samples,
+        )
+        if not chunk:
+            self.last_raw_chunk = np.empty((0, 0), dtype=np.float64)
+            self.last_timestamps = np.empty((0,), dtype=np.float64)
+            return self.last_raw_chunk, self.last_timestamps
+
+        samples = np.asarray(chunk, dtype=np.float64)
+        timestamps = np.asarray(timestamps, dtype=np.float64)
+        self._check_channel_count(samples)
+        self.last_raw_chunk = samples
+        self.last_timestamps = timestamps
+        return samples, timestamps
+
+    def _check_channel_count(self, samples):
+        if self.expected_channels is None or samples.size == 0:
+            return
+        actual = int(samples.shape[1])
+        if actual == int(self.expected_channels):
+            return
+        message = (
+            "OpenBCI GUI LSL channel count mismatch: expected {}, got {}".
+            format(self.expected_channels, actual))
+        if self.strict_channels:
+            raise RuntimeError(message)
+        if not self._warned_expected_channels:
+            logger_amp.warning(message)
+            self._warned_expected_channels = True
+
+    def _select_eeg_channels(self, samples):
+        if samples.size == 0:
+            return samples
+        if self.eeg_channel_indices is not None:
+            return samples[:, self.eeg_channel_indices]
+        if self.marker_channel is None:
+            return samples
+        keep = [
+            ind for ind in range(samples.shape[1])
+            if ind != int(self.marker_channel)
+        ]
+        return samples[:, keep]
+
+    def convert_to_metabci(self, samples, timestamps=None):
+        """Convert raw LSL samples to provisional MetaBCI online rows.
+
+        Final trigger alignment for GUI LSL is intentionally left for later
+        tests. At this stage the last column is the MetaBCI trigger column,
+        filled with zeros unless ``marker_channel`` points to a marker column
+        that exists inside the same LSL stream.
+        """
+
+        if samples is None or np.asarray(samples).size == 0:
+            return np.empty((0, 0), dtype=np.float64)
+        samples = np.asarray(samples, dtype=np.float64)
+        eeg = self._select_eeg_channels(samples)
+        trigger = np.zeros(samples.shape[0], dtype=np.float64)
+        if self.marker_channel is not None:
+            marker_index = int(self.marker_channel)
+            if 0 <= marker_index < samples.shape[1]:
+                trigger = samples[:, marker_index].astype(np.float64, copy=True)
+        if timestamps is not None and np.asarray(timestamps).size:
+            self._apply_pending_lsl_markers(np.asarray(timestamps), trigger)
+        metabci_samples = np.column_stack((eeg, trigger))
+        self.last_metabci_chunk = metabci_samples
+        return metabci_samples
+
+    def recv(self):
+        samples, timestamps = self.pull_raw_chunk()
+        if samples.size:
+            self._append_pending_lsl_samples(samples, timestamps)
+        return self._release_pending_lsl_samples().tolist()
+
+    def _append_pending_lsl_samples(self, samples, timestamps):
+        samples = np.asarray(samples, dtype=np.float64)
+        timestamps = np.asarray(timestamps, dtype=np.float64)
+        if samples.size == 0:
+            return
+        if self._pending_samples.size == 0:
+            self._pending_samples = samples
+            self._pending_timestamps = timestamps
+        else:
+            self._pending_samples = np.vstack((self._pending_samples, samples))
+            self._pending_timestamps = np.concatenate((
+                self._pending_timestamps, timestamps))
+
+    def _release_pending_lsl_samples(self):
+        if self._pending_samples.size == 0:
+            return np.empty((0, 0), dtype=np.float64)
+
+        if self.marker_stream_name and self.marker_delay > 0:
+            cutoff = pylsl.local_clock() - self.marker_delay
+            release_count = int(np.searchsorted(
+                self._pending_timestamps, cutoff, side="right"))
+        else:
+            release_count = self._pending_samples.shape[0]
+
+        if release_count <= 0:
+            return np.empty((0, 0), dtype=np.float64)
+
+        samples = self._pending_samples[:release_count]
+        timestamps = self._pending_timestamps[:release_count]
+        self._pending_samples = self._pending_samples[release_count:]
+        self._pending_timestamps = self._pending_timestamps[release_count:]
+        return self.convert_to_metabci(samples, timestamps)
+
+    def _apply_pending_lsl_markers(self, timestamps, trigger):
+        if trigger.size == 0 or timestamps.size == 0:
+            return
+        block_start = float(timestamps[0])
+        block_end = float(timestamps[-1])
+        if timestamps.size > 1:
+            sample_period = float(np.median(np.diff(timestamps)))
+        else:
+            sample_period = 1.0 / float(self.stream_metadata.get("nominal_srate") or 1000.0)
+        stale_tolerance = max(0.0, 1.5 * sample_period)
+        remaining = []
+        with self._marker_lock:
+            for marker_ts, value in self._pending_lsl_markers:
+                if marker_ts > block_end:
+                    remaining.append((marker_ts, value))
+                    continue
+                if marker_ts < block_start:
+                    if marker_ts >= block_start - stale_tolerance:
+                        ind = 0
+                    else:
+                        self._dropped_lsl_markers += 1
+                        continue
+                else:
+                    ind = int(np.searchsorted(timestamps, marker_ts, side="left"))
+                if ind >= trigger.size:
+                    ind = trigger.size - 1
+                trigger[ind] = value
+            self._pending_lsl_markers = remaining
+
+    def flush_pending(self):
+        if self._pending_samples.size == 0:
+            return []
+        samples = self._pending_samples
+        timestamps = self._pending_timestamps
+        self._pending_samples = np.empty((0, 0), dtype=np.float64)
+        self._pending_timestamps = np.empty((0,), dtype=np.float64)
+        return self.convert_to_metabci(samples, timestamps).tolist()
+
+    def get_stream_info(self):
+        info = dict(self.stream_metadata)
+        if self.marker_stream_metadata:
+            info["marker_stream_info"] = dict(self.marker_stream_metadata)
+        return info
+
+    def get_channel_labels(self):
+        return list(self.channel_labels)
+
+    def get_last_timestamps(self):
+        return self.last_timestamps.copy()
+
+    def get_last_raw_chunk(self):
+        return self.last_raw_chunk.copy()
+
+
+OpenBCIGUI = OpenBCI
 
 
 class HTOnlineSystem(BaseAmplifier):

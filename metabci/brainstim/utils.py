@@ -1,8 +1,14 @@
 import serial
 from psychopy import parallel
 import numpy as np
+import json
+import queue
+import socket
+import struct
+import threading
+import time
 
-from pylsl import StreamInfo, StreamOutlet
+from pylsl import StreamInfo, StreamOutlet, local_clock
 
 
 class NeuroScanPort:
@@ -133,6 +139,110 @@ class LsLPort:
         # We don't need 0 trigger before a int trigger
         if str(label) != '0':
             self.outlet.push_sample(str(label))
+
+
+class OpenBCIPort:
+    """Send OpenBCI markers to GUI, local LSL, or both.
+
+    Parameters
+    ----------
+    target:
+        ``"gui"`` sends a network-order float32 UDP marker to OpenBCI GUI.
+        ``"lsl"`` publishes a local one-channel LSL marker stream for MetaBCI.
+        ``"both"`` does both with one ``setData`` call.
+    """
+
+    NAME = "OpenBCI Port"
+    TARGET_GUI = "gui"
+    TARGET_LSL = "lsl"
+    TARGET_BOTH = "both"
+
+    def __init__(
+        self,
+        port_addr=None,
+        target="both",
+        stream_name="obci_eeg2",
+        stream_type="Marker",
+        source_id="metabci_openbci_marker",
+        send_zero=False,
+    ):
+        self.target = self._normalize_target(target)
+        self.address = self._normalize_address(port_addr)
+        self.stream_name = stream_name
+        self.stream_type = stream_type
+        self.source_id = source_id
+        self.send_zero = send_zero
+
+        self.sock = None
+        if self.target in (self.TARGET_GUI, self.TARGET_BOTH):
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        self.info = None
+        self.outlet = None
+        if self.target in (self.TARGET_LSL, self.TARGET_BOTH):
+            self.info = StreamInfo(
+                name=stream_name,
+                type=stream_type,
+                channel_count=1,
+                nominal_srate=0,
+                channel_format="float32",
+                source_id=source_id,
+            )
+            self.outlet = StreamOutlet(self.info)
+
+    @staticmethod
+    def _normalize_address(port_addr):
+        if port_addr is None:
+            return ("127.0.0.1", 12350)
+        if isinstance(port_addr, tuple):
+            return (port_addr[0], int(port_addr[1]))
+        if isinstance(port_addr, int):
+            return ("127.0.0.1", int(port_addr))
+        if isinstance(port_addr, str):
+            if ":" in port_addr:
+                host, port = port_addr.rsplit(":", 1)
+                return (host, int(port))
+            if port_addr.isdigit():
+                return ("127.0.0.1", int(port_addr))
+            return (port_addr, 12350)
+        raise ValueError("port_addr must be a tuple, int, str, or None")
+
+    @classmethod
+    def _normalize_target(cls, target):
+        if target is None:
+            return cls.TARGET_BOTH
+        normalized = str(target).strip().lower().replace("-", "_")
+        aliases = {
+            "gui": cls.TARGET_GUI,
+            "openbci_gui": cls.TARGET_GUI,
+            "udp": cls.TARGET_GUI,
+            "lsl": cls.TARGET_LSL,
+            "local_lsl": cls.TARGET_LSL,
+            "metabci": cls.TARGET_LSL,
+            "metabci_lsl": cls.TARGET_LSL,
+            "both": cls.TARGET_BOTH,
+            "all": cls.TARGET_BOTH,
+            "gui_lsl": cls.TARGET_BOTH,
+            "openbci_gui_lsl": cls.TARGET_BOTH,
+        }
+        if normalized not in aliases:
+            raise ValueError("Unsupported OpenBCIPort target: {}".format(target))
+        return aliases[normalized]
+
+    def setData(self, label):
+        label = float(label)
+        if label == 0 and not self.send_zero:
+            return
+        if self.sock is not None:
+            self.sock.sendto(struct.pack("!f", label), self.address)
+        if self.outlet is not None:
+            self.outlet.push_sample([label], local_clock())
+
+    def close(self):
+        if self.sock is not None:
+            self.sock.close()
+            self.sock = None
+        self.outlet = None
 
 
 def _check_array_like(value, length=None):

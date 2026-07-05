@@ -21,6 +21,17 @@ from sklearn.model_selection import (
 )
 import torch
 
+### ==============================添加内容=============================== ###
+import os
+import copy
+import pickle
+from sklearn.metrics import confusion_matrix
+from torch.utils.data import DataLoader, TensorDataset
+from torch.nn.functional import softmax
+from metabci.brainda.utils.performance import Performance
+# from visdom import Visdom
+### ==============================添加内容=============================== ###
+
 
 def set_random_seeds(seed: int):
     """Set seeds for python random module numpy.random and torch.
@@ -837,3 +848,583 @@ def match_char_kfold_indices(k: int, meta: DataFrame, indices):
     val_ix = np.concatenate(val_ix)
     test_ix = np.concatenate(test_ix)
     return train_ix, val_ix, test_ix
+
+
+
+### ==============================添加内容=============================== ###
+# %% Model parameter reset
+def reset_parameters(model):
+    """Reset the parameters of a PyTorch model if it has a reset_parameters method.
+
+    This function checks if the provided model has a reset_parameters method and calls
+    it to reinitialize the model's parameters. It is useful for resetting neural network
+    weights to their initial state before training or inference.
+
+    author: Guangjin Liang <3330635482@qq.com>
+
+    Created on: 2025-05-21
+
+    update log:
+        2025-05-21 by Guangjin Liang <3330635482@qq.com>: Initial implementation.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The PyTorch model whose parameters need to be reset.
+
+    Returns
+    -------
+    None
+        Resets the model parameters in-place if the method exists.
+    """
+    if hasattr(model, 'reset_parameters'):
+        model.reset_parameters()
+
+
+# TODO: 这里应该使用官方提供的方案
+def cross_validate(x_data, y_label, kfold, data_seed=20230520):
+    '''
+    This version dosen't use early stoping.
+    Arg:
+        sub:Subject number.
+        data_path:The data path of all subjects.
+        augment(bool):Data augment.Take care that this operation will change the size in the temporal dimension.
+        validation_rate:The percentage of validation data in the data to be divided.
+        data_seed:The random seed for shuffle the data.
+    @author:Guangjin Liang
+    '''
+
+    skf = StratifiedKFold(n_splits=kfold, shuffle=True, random_state=data_seed)
+    for split_train_index, split_validation_index in skf.split(x_data, y_label):
+        split_train_x = x_data[split_train_index]
+        split_train_y = y_label[split_train_index]
+        split_validation_x = x_data[split_validation_index]
+        split_validation_y = y_label[split_validation_index]
+
+        split_train_x, split_train_y = torch.FloatTensor(split_train_x), torch.LongTensor(split_train_y).reshape(-1)
+        split_validation_x, split_validation_y = torch.FloatTensor(split_validation_x), torch.LongTensor(split_validation_y).reshape(-1)
+
+        split_train_dataset = TensorDataset(split_train_x, split_train_y)
+        split_validation_dataset = TensorDataset(split_validation_x, split_validation_y)
+
+        yield split_train_dataset, split_validation_dataset
+
+
+def validate_model(model, dataset, device, losser, batch_size=128):
+    """Evaluate a PyTorch model on a validation dataset.
+
+    This function computes the average loss and accuracy of the model on the provided
+    dataset using the specified loss function. The model is set to evaluation mode, and
+    gradients are disabled during inference to save memory and improve performance.
+
+    author: Guangjin Liang <3330635482@qq.com>
+
+    Created on: 2025-05-21
+
+    update log:
+        2025-05-21 by Guangjin Liang <3330635482@qq.com>: Initial implementation.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The PyTorch model to evaluate.
+    dataset : torch.utils.data.Dataset
+        The validation dataset to evaluate the model on.
+    device : torch.device
+        The device (CPU or GPU) to perform computations on.
+    losser : callable
+        The loss function to compute the model's loss (e.g., torch.nn.CrossEntropyLoss).
+    batch_size : int, optional
+        Number of samples per batch for the DataLoader (default: 128).
+
+    Returns
+    -------
+    loss_val : float
+        Average loss over the validation dataset.
+    accuracy_val : float
+        Average accuracy over the validation dataset, computed as the fraction of
+        correctly classified samples.
+    """
+    # Create DataLoader for batch processing
+    loader = DataLoader(dataset, batch_size=batch_size)
+    # Initialize accumulators for loss and accuracy
+    loss_val = 0.0
+    accuracy_val = 0.0
+    model.eval() # Set model to evaluation mode
+    # Disable gradient computation for efficiency
+    with torch.no_grad():
+        for inputs, target in loader:
+            # Move inputs and targets to the specified device
+            inputs = inputs.to(device)
+            target = target.to(device)
+
+            probs = model(inputs) # Forward pass: compute model predictions
+            loss = losser(probs, target) # Compute loss
+
+            loss_val += loss.detach().item() # Accumulate loss (detached to avoid gradient tracking)
+            accuracy_val += torch.sum(torch.argmax(probs, dim=1) == target, dtype=torch.float32) # Accumulate accuracy (count correct predictions)
+
+        loss_val = loss_val / len(loader) # Compute average loss
+        accuracy_val = accuracy_val / len(dataset) # Compute average accuracy
+
+    return loss_val, accuracy_val
+
+
+# TODO: 输入的数据应该是meta的类型
+def model_training_two_stage(model, criterion, optimizer, lr_scheduler, frist_epochs, eary_stop_epoch, second_epochs, batch_size,
+                             X_train, Y_train, kfolds, device,
+                             model_name, subject, model_savePath):
+    """Train a PyTorch model using a two-stage training strategy with K-fold cross-validation.
+
+    This function implements a two-stage training process for a neural network model, typically used in
+    brain-computer interface (BCI) tasks. In the first stage, the model is trained on K-fold cross-validation
+    splits with early stopping based on validation loss or accuracy. In the second stage, the best model from
+    the first stage is fine-tuned using both training and validation data. The trained model is saved for each fold.
+
+    author: Guangjin Liang <3330635482@qq.com>
+
+    Created on: 2025-05-21
+
+    update log:
+        2025-05-21 by Guangjin Liang <3330635482@qq.com>: Initial implementation.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The PyTorch model to train (e.g., TCNet_Fusion or EEGNet).
+    criterion : callable
+        The loss function for training (e.g., torch.nn.CrossEntropyLoss).
+    optimizer : torch.optim.Optimizer
+        The optimizer for updating model parameters (e.g., torch.optim.Adam).
+    lr_scheduler : torch.optim.lr_scheduler._LRScheduler or None
+        Learning rate scheduler for adjusting learning rate during training (e.g., CosineAnnealingLR).
+        If None, no scheduler is applied.
+    frist_epochs : int
+        Maximum number of epochs for the first training stage.
+    eary_stop_epoch : int
+        Number of epochs to wait for early stopping if no improvement in validation accuracy.
+    second_epochs : int
+        Maximum number of epochs for the second training stage.
+    batch_size : int
+        Number of samples per batch for DataLoader.
+    X_train : torch.Tensor or np.ndarray
+        Training data with shape [n_samples, n_channels, n_samples].
+    Y_train : torch.Tensor or np.ndarray
+        Training labels with shape [n_samples].
+    kfolds : int
+        Number of folds for K-fold cross-validation.
+    device : torch.device
+        The device (CPU or GPU) to perform computations on.
+    model_name : str
+        Name of the model for saving purposes (e.g., 'TCNet_Fusion').
+    subject : str or int
+        Subject identifier for saving model files.
+    model_savePath : str
+        Directory path to save trained model files.
+
+    Returns
+    -------
+    None
+        Trains the model in-place and saves the model state for each fold to model_savePath.
+        Prints training progress and average evaluation accuracy across folds.
+
+    References
+    ----------
+    .. [1] Schirrmeister RT, Springenberg JT, Fiederer LDJ, Glasstetter M, Eggensperger K, Tangermann M, Hutter F, Burgard W, Ball T.
+           Deep learning with convolutional neural networks for EEG decoding and visualization. Hum Brain Mapp. 2017 Nov;38(11):5391-5420.
+    """
+
+    # vis = Visdom(env='main')  # 设置环境窗口的名称,如果不设置名称就默认为main
+    # opt_train_acc = {'xlabel':'epochs', 'ylabel':'acc_value', 'title':model_name+'_train_acc'}
+    # opt_train_loss = {'xlabel':'epochs', 'ylabel':'loss_value', 'title':model_name+'_train_loss'}
+    # opt_eval_acc = {'xlabel':'epochs', 'ylabel':'acc_value', 'title':model_name+'_eval_acc'}
+    # opt_eval_loss = {'xlabel':'epochs', 'ylabel':'loss_value', 'title':model_name+'_eval_loss'}
+
+    avg_eval_acc = 0
+    for kfold, (train_dataset, valid_dataset) in enumerate(cross_validate(X_train, Y_train, kfolds)):
+
+        # train_acc_window = vis.line(X=[0], Y=[0], opts=opt_train_acc)
+        # train_loss_window = vis.line(X=[0], Y=[0], opts=opt_train_loss)
+        # eval_acc_window = vis.line(X=[0], Y=[0], opts=opt_eval_acc)
+        # eval_loss_window = vis.line(X=[0], Y=[0], opts=opt_eval_loss)
+
+        model.apply(reset_parameters)
+        print(len(train_dataset), len(valid_dataset))
+        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+        ### First step
+        best_acc_kfold = 0
+        best_acc_kfold_loss = np.inf
+        best_loss_kfold = np.inf
+        best_loss_kfold_acc = 0
+        mini_loss = None
+        remaining_epoch = eary_stop_epoch
+        for iter in range(frist_epochs):
+            loss_train = 0
+            accuracy_train = 0
+
+            model.train()
+            for inputs, target in train_dataloader:
+                inputs = inputs.to(device)
+                target = target.to(device)
+                optimizer.zero_grad()  # 清空梯度
+                output = model(inputs)  # 前向传播和计算损失
+                loss = criterion(output, target)
+                loss.backward()  # 反向传播和计算梯度
+                optimizer.step()  # 更新参数
+                accuracy_train += torch.sum(torch.argmax(output, dim=1) == target, dtype=torch.float32) / len(train_dataset)
+                loss_train += loss.detach().item() / len(train_dataloader)
+
+            loss_val, accuracy_val = validate_model(model, valid_dataset, device, criterion)
+
+            # vis.line(X=[iter], Y=[accuracy_train.cpu()], win=train_acc_window,  opts=opt_train_acc,  update='append')
+            # vis.line(X=[iter], Y=[loss_train],           win=train_loss_window, opts=opt_train_loss, update='append')
+            # vis.line(X=[iter], Y=[accuracy_val.cpu()],   win=eval_acc_window,  opts=opt_eval_acc,  update='append')
+            # vis.line(X=[iter], Y=[loss_val],             win=eval_loss_window,   opts=opt_eval_loss,   update='append')
+
+            remaining_epoch = remaining_epoch - 1
+
+            if lr_scheduler:
+                lr_scheduler.step()  # 调整学习率
+
+            if remaining_epoch <= 0:
+                avg_eval_acc += best_acc_kfold
+                break
+            if mini_loss is None or loss_train < mini_loss:
+                mini_loss = loss_train
+
+            if accuracy_val > best_acc_kfold:
+                best_model = copy.deepcopy(model.state_dict())
+                optimizer_state = copy.deepcopy(optimizer.state_dict())
+                best_acc_kfold = accuracy_val
+                best_acc_kfold_loss = loss_val
+                remaining_epoch = eary_stop_epoch
+
+            # if loss_val < best_loss_kfold:
+            #     best_model = copy.deepcopy(model.state_dict())
+            #     optimizer_state = copy.deepcopy(optimizer.state_dict())
+            #     best_loss_kfold = loss_val
+            #     best_loss_kfold_acc = accuracy_val
+            #     remaining_epoch = eary_stop_epoch
+
+            info = '\tKfold:{0:1}\tEpoch:{1:3}\tTra_Loss:{2:.3}\tTr_acc:{3:.3}\tVa_Loss:{4:.3}\tVa_acc:{5:.3}\tMaxVacc:{6:.3}\tToloss:{7:.3}\tramainingEpoch:{8:3}' \
+                   .format(kfold + 1, iter, loss_train, accuracy_train, loss_val, accuracy_val, best_acc_kfold, best_acc_kfold_loss, remaining_epoch)
+            print(info)
+
+            # info = '\tKfold:{0:1}\tEpoch:{1:3}\tTra_Loss:{2:.3}\tTr_acc:{3:.3}\tVa_Loss:{4:.3}\tVa_acc:{5:.3}\tMinVloss:{6:.3}\tToacc:{7:.3}\tramainingEpoch:{8:3}' \
+            #        .format(kfold + 1, iter, loss_train, accuracy_train, loss_val, accuracy_val, best_loss_kfold, best_loss_kfold_acc, remaining_epoch)
+            # print(info)
+
+        info = f'Earyly stopping at Epoch {iter},and retrain the Net using both the training data and validation data.'
+        print(info)
+
+        ### Second step
+        model.load_state_dict(best_model)
+        optimizer.load_state_dict(optimizer_state)
+        valid_dataloader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True)
+
+        for iter in range(second_epochs):
+            model.train()
+            for inputs, target in train_dataloader:
+                inputs = inputs.to(device)
+                target = target.to(device)
+                optimizer.zero_grad()  # 清空梯度
+                output = model(inputs)  # 前向传播和计算损失
+                loss = criterion(output, target)
+                loss.backward()  # 反向传播和计算梯度
+                optimizer.step()  # 更新参数
+
+            for inputs, target in valid_dataloader:
+                inputs = inputs.to(device)
+                target = target.to(device)
+                optimizer.zero_grad()  # 清空梯度
+                output = model(inputs)  # 前向传播和计算损失
+                loss = criterion(output, target)
+                loss.backward()  # 反向传播和计算梯度
+                optimizer.step()  # 更新参数
+
+            loss_val, accuracy_val = validate_model(model, valid_dataset, device, criterion)
+
+            info = '\tKfold:{0:1}\tEpoch:{1:3}\tVa_Loss:{2:.3}\tVa_acc:{3:.3}'.format(kfold + 1, iter, loss_val, accuracy_val)
+            print(info)
+            if loss_val < mini_loss:
+                break
+
+        file_name = '{}_sub{}_fold{}_acc{:.4}.pth'.format(model_name, subject, kfold, best_acc_kfold)
+        print(file_name)
+        torch.save(model.state_dict(), os.path.join(model_savePath, file_name))
+
+        info = 'The model was saved successfully!'
+        print(info)
+
+    info = f"Avg_eval_Acc : {avg_eval_acc * 100 / kfolds:4f}"
+    print(info)
+
+
+# TODO: 输入的数据应该是meta的类型
+def model_training_two_stage_up(model, criterion, optimizer, lr_scheduler, frist_epochs, eary_stop_epoch, second_epochs, batch_size,
+                                X_train, Y_train, kfolds, device,
+                                model_name, subject, model_savePath):
+    """Train a PyTorch model using an enhanced two-stage training strategy with K-fold cross-validation.
+
+    This function implements a two-stage training process for a neural network model, optimized for
+    brain-computer interface (BCI) tasks. In the first stage, the model is trained on K-fold cross-validation
+    splits, with early stopping based on both validation loss and accuracy to select the best model.
+    In the second stage, the best model is fine-tuned using both training and validation data. The trained
+    model is saved for each fold. Compared to standard two-stage training, this version prioritizes models
+    with lower validation loss while ensuring high accuracy.
+
+    author: Guangjin Liang <3330635482@qq.com>
+
+    Created on: 2025-05-21
+
+    update log:
+        2025-05-21 by Guangjin Liang <3330635482@qq.com>: Initial implementation.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The PyTorch model to train (e.g., TCNet_Fusion or EEGNet).
+    criterion : callable
+        The loss function for training (e.g., torch.nn.CrossEntropyLoss).
+    optimizer : torch.optim.Optimizer
+        The optimizer for updating model parameters (e.g., torch.optim.Adam).
+    lr_scheduler : torch.optim.lr_scheduler._LRScheduler or None
+        Learning rate scheduler for adjusting learning rate during training (e.g., CosineAnnealingLR).
+        If None, no scheduler is applied.
+    frist_epochs : int
+        Maximum number of epochs for the first training stage.
+    eary_stop_epoch : int
+        Number of epochs to wait for early stopping if no improvement in validation loss or accuracy.
+    second_epochs : int
+        Maximum number of epochs for the second training stage.
+    batch_size : int
+        Number of samples per batch for DataLoader.
+    X_train : torch.Tensor or np.ndarray
+        Training data with shape [n_samples, n_channels, n_samples].
+    Y_train : torch.Tensor or np.ndarray
+        Training labels with shape [n_samples].
+    kfolds : int
+        Number of folds for K-fold cross-validation.
+    device : torch.device
+        The device (CPU or GPU) to perform computations on.
+    model_name : str
+        Name of the model for saving purposes (e.g., 'TCNet_Fusion').
+    subject : str or int
+        Subject identifier for saving model files.
+    model_savePath : str
+        Directory path to save trained model files.
+
+    Returns
+    -------
+    None
+        Trains the model in-place and saves the model state for each fold to model_savePath.
+        Prints training progress and average evaluation accuracy across folds.
+
+    References
+    ----------
+    .. [1] Liang G, Cao D, Wang J, Zhang Z, Wu Y.
+           EISATC-Fusion: Inception Self-Attention Temporal Convolutional Network Fusion for Motor Imagery EEG Decoding.
+           IEEE Trans Neural Syst Rehabil Eng. 2024;32:1535-1545.
+    """
+    avg_eval_acc = 0
+    for kfold, (train_dataset, valid_dataset) in enumerate(cross_validate(X_train, Y_train, kfolds)):
+        model.apply(reset_parameters)
+        print(len(train_dataset), len(valid_dataset))
+        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+        ### First step
+        best_loss_kfold = np.inf
+        best_loss_kfold_acc = 0
+        best_acc_kfold = 0
+        best_acc_kfold_loss = np.inf
+        mini_loss = None
+        remaining_epoch = eary_stop_epoch
+        for iter in range(frist_epochs):
+            loss_train = 0
+            accuracy_train = 0
+
+            model.train()
+            for inputs, target in train_dataloader:
+                inputs = inputs.to(device)
+                target = target.to(device)
+                optimizer.zero_grad()  # 清空梯度
+                output = model(inputs)  # 前向传播和计算损失
+                loss = criterion(output, target)
+                loss.backward()  # 反向传播和计算梯度
+                optimizer.step()  # 更新参数
+                accuracy_train += torch.sum(torch.argmax(output, dim=1) == target, dtype=torch.float32) / len(train_dataset)
+                loss_train += loss.detach().item() / len(train_dataloader)
+
+            loss_val, accuracy_val = validate_model(model, valid_dataset, device, criterion)
+
+            remaining_epoch = remaining_epoch - 1
+
+            if lr_scheduler:
+                lr_scheduler.step()  # 调整学习率
+
+            if remaining_epoch <= 0:
+                avg_eval_acc += best_acc_kfold
+                break
+            if mini_loss is None or loss_train < mini_loss:
+                mini_loss = loss_train
+
+            if loss_val < best_loss_kfold:
+                if accuracy_val >= best_acc_kfold:
+                    best_model = copy.deepcopy(model.state_dict())
+                    optimizer_state = copy.deepcopy(optimizer.state_dict())
+                    best_acc_kfold = accuracy_val
+                    best_acc_kfold_loss = loss_val
+                remaining_epoch = eary_stop_epoch
+                best_loss_kfold = loss_val
+                best_loss_kfold_acc = accuracy_val
+
+            if accuracy_val > best_acc_kfold:
+                best_model = copy.deepcopy(model.state_dict())
+                optimizer_state = copy.deepcopy(optimizer.state_dict())
+                best_acc_kfold = accuracy_val
+                best_acc_kfold_loss = loss_val
+                remaining_epoch = eary_stop_epoch
+
+            info = '\tKfold:{0:1}\tEpoch:{1:3}\tTra_Loss:{2:.3}\tTr_acc:{3:.3}\tVa_Loss:{4:.3}\tVa_acc:{5:.3}\tMinVloss:{6:.3}\tToacc:{7:.3}\tMaxVacc:{8:.3}\tToloss:{9:.3}\tramainingEpoch:{10:3}' \
+                   .format(kfold + 1, iter, loss_train, accuracy_train, loss_val, accuracy_val, best_loss_kfold,
+                           best_loss_kfold_acc, best_acc_kfold, best_acc_kfold_loss, remaining_epoch)
+            print(info)
+
+        info = f'Earyly stopping at Epoch {iter},and retrain the Net using both the training data and validation data.'
+        print(info)
+
+        ### Second step
+        model.load_state_dict(best_model)
+        optimizer.load_state_dict(optimizer_state)
+        valid_dataloader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True)
+
+        for iter in range(second_epochs):
+            model.train()
+            for inputs, target in train_dataloader:
+                inputs = inputs.to(device)
+                target = target.to(device)
+                optimizer.zero_grad()  # 清空梯度
+                output = model(inputs)  # 前向传播和计算损失
+                loss = criterion(output, target)
+                loss.backward()  # 反向传播和计算梯度
+                optimizer.step()  # 更新参数
+
+            for inputs, target in valid_dataloader:
+                inputs = inputs.to(device)
+                target = target.to(device)
+                optimizer.zero_grad()  # 清空梯度
+                output = model(inputs)  # 前向传播和计算损失
+                loss = criterion(output, target)
+                loss.backward()  # 反向传播和计算梯度
+                optimizer.step()  # 更新参数
+
+            loss_val, accuracy_val = validate_model(model, valid_dataset, device, criterion)
+
+            info = '\tKfold:{0:1}\tEpoch:{1:3}\tVa_Loss:{2:.3}\tVa_acc:{3:.3}'.format(kfold + 1, iter, loss_val, accuracy_val)
+            print(info)
+            if loss_val < mini_loss:
+                break
+
+        file_name = '{}_sub{}_fold{}_acc{:.4}.pth'.format(model_name, subject, kfold, best_acc_kfold)
+        print(file_name)
+        torch.save(model.state_dict(), os.path.join(model_savePath, file_name))
+
+        info = 'The model was saved successfully!'
+        print(info)
+
+    info = f"Avg_eval_Acc : {avg_eval_acc * 100 / kfolds:4f}"
+    print(info)
+
+
+# TODO: 输入的数据应该是meta的类型
+def test_with_cross_validate(model, device, X_test, Y_test, model_path, kfolds, subject, visual=False, features_path=None):
+    """Evaluate a PyTorch model on a test dataset using K-fold cross-validated models.
+
+    This function loads pre-trained model weights from K-fold cross-validation, evaluates
+    the model on the test dataset, and computes performance metrics including accuracy,
+    precision, recall, F1 score, and Cohen's Kappa score. It aggregates results across folds
+    to compute average accuracy and Kappa score, suitable for brain-computer interface (BCI)
+    tasks such as EEG signal classification.
+
+    author: Guangjin Liang <3330635482@qq.com>
+
+    Created on: 2025-05-21
+
+    update log:
+        2025-05-21 by Guangjin Liang <3330635482@qq.com>: Initial implementation.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The PyTorch model to evaluate (e.g., TCNet_Fusion or EEGNet).
+    device : torch.device
+        The device (CPU or GPU) to perform computations on.
+    X_test : torch.Tensor or np.ndarray
+        Test data with shape [n_samples, n_channels, n_samples].
+    Y_test : array-like
+        Test labels with shape [n_samples].
+    model_path : str
+        Directory path containing saved model files for each fold.
+    kfolds : int
+        Number of folds used in cross-validation.
+    subject : str or int
+        Subject identifier for logging purposes.
+    visual : bool, optional
+        Whether to save the features of the test data. The default is False.
+    features_path : str, optional
+        Directory path to save the features of the test data. The default is None.
+
+    Returns
+    -------
+    avg_acc : float
+        Average classification accuracy across all folds (in percentage).
+    avg_Kscore : float
+        Average Cohen's Kappa score across all folds.
+    """
+    if isinstance(X_test, torch.Tensor):
+        X_test = X_test.to(device).to(torch.float32).requires_grad_()
+    else:
+        X_test = torch.from_numpy(X_test).to(device).to(torch.float32).requires_grad_()
+    files = os.listdir(model_path)
+
+    avg_acc = 0
+    avg_Kscore = 0
+    performance = Performance(
+        estimators_list=["Acc", "Precision", "Recall", "F1", "Kappa"],
+    )
+    for kfold in range(0, kfolds):
+        for filename in files:
+            if 'fold{}_'.format(kfold) in filename:
+                file_name = filename
+                break
+        file_path = os.path.join(model_path, file_name)
+        state_dict = torch.load(file_path, map_location=device)
+
+        model.load_state_dict(state_dict)
+        model.eval()
+        with torch.no_grad():
+            if visual:
+                probs, embed_feature, transformer_feature = model(X_test, visual=True)
+                features_path_1 = features_path + 'embed_feature.pkl'
+                with open(features_path_1, 'wb') as f:
+                    pickle.dump(embed_feature.to('cpu').numpy(), f)
+                features_path_2 = features_path + 'transformer_feature.pkl'
+                with open(features_path_2, 'wb') as f:
+                    pickle.dump(transformer_feature.to('cpu').numpy(), f)
+            else:
+                probs = model(X_test)
+            probs = softmax(probs, dim=-1).argmax(dim=-1).to('cpu').numpy()
+            results = performance.evaluate(y_true=Y_test, y_pred=probs)
+            confusion = confusion_matrix(Y_test, probs)
+
+            avg_acc += results["Acc"]
+            avg_Kscore += results["Kappa"]
+
+            print(f"subject: {subject}, kfold: {kfold}, Classification accuracy: {results['Acc'] * 100:.4f}")
+            print(f'precision:\t{results["Precision"]}\nrecall:\t\t{results["Recall"]}\nf1:\t\t{results["F1"]}\nk_score:\t{results["Kappa"]}\nconfusion:\n{confusion}\n')
+
+    print(f"Average accuracy:\t{avg_acc / kfolds * 100:.4f}\nAverage kappa score:\t{avg_Kscore / kfolds:.4f}")
+
+    return avg_acc / kfolds * 100, avg_Kscore / kfolds
+### ==============================添加内容=============================== ###
