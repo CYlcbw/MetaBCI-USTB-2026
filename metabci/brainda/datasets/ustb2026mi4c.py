@@ -11,6 +11,7 @@ from mne.io import Raw, RawArray
 
 from .base import BaseDataset
 from ..utils.channels import upper_ch_names
+from ..utils.download import mne_data_path
 
 
 class USTB2026MI4C(BaseDataset):
@@ -47,6 +48,11 @@ class USTB2026MI4C(BaseDataset):
         / "Dataset"
     )
 
+    _REMOTE_BASE_URL = (
+        "https://raw.githubusercontent.com/CYlcbw/MetaBCI-USTB-2026/master/"
+        "demos/brainflow_demos/data/ustb2025mi4c-main/Dataset"
+    )
+
     _SUBJECT_FILES = {
         1: [("base8_s01_s04_final", "S01_base8_all_runs.npz")],
         2: [("base8_s01_s04_final", "S02_base8_all_runs.npz")],
@@ -56,6 +62,14 @@ class USTB2026MI4C(BaseDataset):
             ("base8_s01_s04_final", "S05_base8_all_runs.npz"),
             ("base8_s01_s05_final", "S05_base8_all_runs.npz"),
         ],
+    }
+
+    _REMOTE_SUBJECT_FILES = {
+        1: ("base8_s01_s04_final", "S01_base8_all_runs.npz"),
+        2: ("base8_s01_s04_final", "S02_base8_all_runs.npz"),
+        3: ("base8_s01_s04_final", "S03_base8_all_runs.npz"),
+        4: ("base8_s01_s04_final", "S04_base8_all_runs.npz"),
+        5: ("base8_s01_s05_final", "S05_base8_all_runs.npz"),
     }
 
     def __init__(self):
@@ -82,21 +96,33 @@ class USTB2026MI4C(BaseDataset):
             raise ValueError("Invalid subject id")
 
         data_root = Path(path).expanduser() if path is not None else self._DATASET_DIR
+        local_path = self._find_local_subject_file(subject, data_root)
+        if local_path is not None and not force_update:
+            return [[local_path]]
+
+        folder, file_name = self._REMOTE_SUBJECT_FILES[subject]
+        url = "{}/{}/{}".format(self._REMOTE_BASE_URL, folder, file_name)
+        file_dest = mne_data_path(
+            url,
+            self.dataset_code,
+            path=path,
+            proxies=proxies,
+            force_update=force_update,
+            update_path=update_path,
+            verbose=verbose,
+        )
+        return [[Path(file_dest)]]
+
+    def _find_local_subject_file(self, subject: int, data_root: Path) -> Optional[Path]:
         candidates = []
         for folder, file_name in self._SUBJECT_FILES[subject]:
             candidates.append(data_root / folder / file_name)
             candidates.append(data_root / file_name)
-
         for candidate in candidates:
             if candidate.exists():
-                return [[candidate]]
+                return candidate
 
-        raise FileNotFoundError(
-            "USTB2026MI4C base8 data file not found for subject {:d}. Checked: {}".format(
-                subject,
-                ", ".join(str(p) for p in candidates),
-            )
-        )
+        return None
 
     def load_subject_arrays(self, subject: Union[str, int]):
         paths = self.data_path(subject)

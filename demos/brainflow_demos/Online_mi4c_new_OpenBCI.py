@@ -29,6 +29,7 @@ from metabci.brainda.algorithms.utils.model_selection import (
     model_training_two_stage,
     test_with_cross_validate,
 )
+from metabci.brainda.datasets import USTB2026MI4C
 from metabci.brainflow.amplifiers import OpenBCI
 from metabci.brainflow.workers import command_output
 
@@ -43,14 +44,6 @@ OPENBCI_MARKER_STREAM_NAME = "obci_eeg2"
 SOCKET_HOST = "0.0.0.0"
 SOCKET_PORT = 12345
 
-DATA_PATH = os.path.join(
-    BASE_DIR,
-    "data",
-    "ustb2025mi4c-main",
-    "Dataset",
-    "base8_s01_s04_final",
-    "S01_base8_all_runs.npz",
-)
 MODEL_SAVE_PATH = os.path.join(
     BASE_DIR,
     "checkpoints",
@@ -84,9 +77,10 @@ def set_random_seed(seed_value=20250702):
 
 
 def get_data_new(subjects):
-    with np.load(DATA_PATH, allow_pickle=True) as npz:
-        epoch_data = npz["X"].astype(np.float32)
-        labels = npz["y"].astype(np.int64)
+    subject = int(subjects[0] if isinstance(subjects, (list, tuple)) else subjects)
+    arrays = USTB2026MI4C().load_subject_arrays(subject)
+    epoch_data = arrays["X"].astype(np.float32)
+    labels = arrays["y"].astype(np.int64)
 
     n_epochs, _, n_times = epoch_data.shape
     window_length = WINDOW_LENGTH_SAMPLES
