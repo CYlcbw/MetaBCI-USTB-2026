@@ -142,7 +142,10 @@ def plot_tsne_feature(features_path, true_labels, output_dir, file_name, dpi=300
     colors = [5, 3, 1, 7] # Predefined color indices for plt.cm.Paired
 
     # Apply t-SNE for dimensionality reduction
-    tsne = TSNE(n_components=2, perplexity=5, n_iter=3000, n_iter_without_progress=300, random_state=random_state)
+    try:
+        tsne = TSNE(n_components=2, perplexity=5, max_iter=3000, n_iter_without_progress=300, random_state=random_state)
+    except TypeError:
+        tsne = TSNE(n_components=2, perplexity=5, n_iter=3000, n_iter_without_progress=300, random_state=random_state)
     plt.figure(figsize=(5, 5)) # Create figure for scatter plot
     X_tsne = tsne.fit_transform(Fatures) # Transform features to 2D
     X_tsne = MinMaxScaler().fit_transform(X_tsne) # Normalize t-SNE output to [0, 1] range
@@ -213,7 +216,7 @@ def convWeight_to_waveform(model_savePath, model_convLayerName, output_dir, ylim
     """
     # Load model parameters
     print('Loading model parameters……')
-    state_dict = torch.load(model_savePath)
+    state_dict = torch.load(model_savePath, map_location="cpu")
     print('The model parameters are loaded!')
     print('Image is being generated……')
     # Extract temporal convolutional weights
@@ -287,7 +290,7 @@ def convWeight_to_topography(model_savePath, model_convLayerName, output_dir, sc
     """
     print('Loading model parameters……')
     # 加载模型参数
-    state_dict = torch.load(model_savePath)
+    state_dict = torch.load(model_savePath, map_location="cpu")
     print('The model parameters are loaded!')
     print('Image is being generated……')
 

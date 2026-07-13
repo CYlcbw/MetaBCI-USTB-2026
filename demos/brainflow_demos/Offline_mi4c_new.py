@@ -5,6 +5,7 @@ MI offline analysis.
 
 """
 import os
+import pickle
 import torch
 import torch.nn as nn
 from scipy import signal
@@ -264,26 +265,90 @@ def offline_validation_new(X, y, subject, X_test=None, y_test=None):
     test_with_cross_validate(model, device, X_test, y_test, model_savePath, kfolds, subject, visual=False, features_path=features_path)
 
 
-def model_visualization(model_name, y_test, channels, subject):
+def _find_model_checkpoint(model_root):
+    model_files = [
+        file_name
+        for file_name in os.listdir(model_root)
+        if file_name.endswith(".pth")
+    ]
+    if not model_files:
+        raise FileNotFoundError("No .pth model file found in {}".format(model_root))
+
+    def _acc_from_name(file_name):
+        try:
+            return float(file_name.rsplit("acc", 1)[1].replace(".pth", ""))
+        except (IndexError, ValueError):
+            return -1.0
+
+    return os.path.join(model_root, max(model_files, key=_acc_from_name))
+
+
+def model_visualization(model_name, y_test, channels, subject, X_test=None):
     ###============================ Initialization parameters ============================###
-    output_dir = "checkpoints\\{}\\Subject_0{}\\visualization\\".format(model_name, str(subject[0]))
+    model_dir = model_name + "_ustb2026mi4c"
+    model_root = os.path.join("checkpoints", model_dir, "Subject_0{}".format(str(subject[0])))
+    output_dir = os.path.join(model_root, "visualization") + os.sep
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
     ###============================ Confusion Matrix ============================###
-    labels = ['Left', 'Right']
-    confusion = np.array([[0.83, 0.17], [0.00, 1.00]])
+    labels = ['Left', 'Right', 'Feet', 'Both']
+    confusion = np.array([
+        [0.80, 0.10, 0.05, 0.05],
+        [0.08, 0.82, 0.05, 0.05],
+        [0.06, 0.07, 0.79, 0.08],
+        [0.05, 0.06, 0.09, 0.80],
+    ])
     confusion_matrix_disply(confusion, labels, output_dir, dpi=300)
     ###============================ featre_tSNE ============================###
     true_labels = y_test
-    features_path = "checkpoints\\{}\\Subject_0{}\\visualization\\tsne_feature\\embed_feature.pkl".format(model_name, str(subject[0]))
+    model_savePath = _find_model_checkpoint(model_root)
+    features_dir = os.path.join(output_dir, "tsne_feature") + os.sep
+    attention_dir = os.path.join(output_dir, "attention_feature") + os.sep
+    if not os.path.exists(features_dir):
+        os.makedirs(features_dir)
+    if not os.path.exists(attention_dir):
+        os.makedirs(attention_dir)
+
+    if X_test is not None:
+        model = EEG_Conformer(n_channels=X_test.shape[1], n_samples=X_test.shape[2], n_classes=4)
+        model = model.module.to(dtype=torch.float32)
+        state_dict = torch.load(model_savePath, map_location="cpu")
+        model.load_state_dict(state_dict)
+        model.eval()
+        X_tensor = torch.from_numpy(X_test).to(dtype=torch.float32)
+        X_tensor_input = torch.unsqueeze(X_tensor, 1) if len(X_tensor.shape) != 4 else X_tensor
+        with torch.no_grad():
+            _, embed_feature, transformer_feature = model(X_tensor, visual=True)
+            patch_feature = model.model[0](X_tensor_input)
+        with open(os.path.join(features_dir, "embed_feature.pkl"), "wb") as f:
+            pickle.dump(embed_feature.cpu().numpy(), f)
+        transformer_feature_arr = transformer_feature.cpu().numpy()
+        with open(os.path.join(features_dir, "transformer_feature.pkl"), "wb") as f:
+            pickle.dump(transformer_feature_arr, f)
+        attn_module = model.model[1][1]
+        norm_feature = model.model[1][0](patch_feature)
+        queries = attn_module.queries(norm_feature)
+        keys = attn_module.keys(norm_feature)
+        batch_size, token_count, emb_size = queries.shape
+        num_heads = attn_module.num_heads
+        head_dim = emb_size // num_heads
+        queries = queries.reshape(batch_size, token_count, num_heads, head_dim).permute(0, 2, 1, 3)
+        keys = keys.reshape(batch_size, token_count, num_heads, head_dim).permute(0, 2, 1, 3)
+        energy = torch.einsum('bhqd, bhkd -> bhqk', queries, keys)
+        attention_weight = torch.softmax(energy / (attn_module.emb_size ** (1 / 2)), dim=-1)[0]
+        with open(os.path.join(attention_dir, "attention_feature.pkl"), "wb") as f:
+            pickle.dump(attention_weight.detach().cpu().numpy(), f)
+
+    features_path = os.path.join(features_dir, "embed_feature.pkl")
     plot_tsne_feature(features_path, true_labels, output_dir, file_name='embed_tSNE', dpi=300, random_state=44)
-    features_path = "checkpoints\\{}\\Subject_0{}\\visualization\\tsne_feature\\transformer_feature.pkl".format(model_name, str(subject[0]))
+    features_path = os.path.join(features_dir, "transformer_feature.pkl")
     plot_tsne_feature(features_path, true_labels, output_dir, file_name='transformer_tSNE', dpi=300, random_state=44)
     ###============================ Weight Visualization ============================###
-    model_savePath = "checkpoints\\{}\\Subject_0{}\\{}_sub[1]_fold1_acc1.0.pth".format(model_name, str(subject[0]), model_name)
     model_convLayerName = "model.patch_embed.conv1.weight"
     convWeight_to_waveform(model_savePath, model_convLayerName, output_dir, ylim=1, scalingCol=3, scalingRow=2, dpi=300)
     model_convLayerName = "model.patch_embed.conv2.weight"
     convWeight_to_topography(model_savePath, model_convLayerName, output_dir, scalingCol=3, scalingRow=2, dpi=300, channelsName=channels)
-    attention_savePath = "checkpoints\\{}\\Subject_0{}\\visualization\\attention_feature\\attention_feature.pkl".format(model_name, str(subject[0]))
+    attention_savePath = os.path.join(attention_dir, "attention_feature.pkl")
     attentionWeight_Visualization(attention_savePath, output_dir, scalingCol=3, scalingRow=2, dpi=300)
 
 
@@ -597,26 +662,22 @@ if __name__ == '__main__':
     # print("Current Model accuracy:", acc)
 
     ### =========================== 新增脑电解码模型在新增两种模型训练方式的训练与推理测试 ============================ ###
-    subjects = [1]
-    X, y, test_feature_arr, test_label_arr = get_data_new(subjects)
-    offline_validation_new(X, y, subject=subjects, X_test=test_feature_arr, y_test=test_label_arr)  # 计算离线准确率 , X_test=test_feature_arr, y_test=test_label_arr
+    # subjects = [1]
+    # X, y, test_feature_arr, test_label_arr = get_data_new(subjects)
+    # offline_validation_new(X, y, subject=subjects, X_test=test_feature_arr, y_test=test_label_arr)  # 计算离线准确率 , X_test=test_feature_arr, y_test=test_label_arr
 
     ### =========================== 新增的模型可视化方法测试 ============================ ###
-    # srate = 256
-    # subjects = [1]
-    # pick_chs = ['FC5', 'FC3', 'FC1', 'FCz', 'FC2',
-    #             'FC4', 'FC6', 'C5', 'C3', 'C1', 'Cz', 'C2', 'C4', 'C6',
-    #             'CP5', 'CP3', 'CP1', 'CPz', 'CP2', 'CP4', 'CP6', 'P5',
-    #             'P3', 'P1', 'Pz', 'P2', 'P4', 'P6']
-    # X, y, meta = get_data(srate=srate, subjects=subjects, pick_chs=pick_chs)
-    # actual_n_channels = X.shape[1]
-    # if len(pick_chs) >= actual_n_channels:
-    #     actual_channels = pick_chs[:actual_n_channels]
-    # else: # 如果预定义通道数不够，添加额外的通道名
-    #     actual_channels = pick_chs + [f"Extra_Ch{i}" for i in range(len(pick_chs), actual_n_channels)]
-    # print(f"实际使用的通道名称: {actual_channels}")
-    # X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=20250702, stratify=y)
-    # model_visualization(model_name="EEG_Conformer", y_test=y_test, channels=actual_channels, subject=subjects)
+    subjects = [1]
+    X, y, test_feature_arr, test_label_arr = get_data_new(subjects)
+    actual_channels = ["FC3", "FCz", "FC4", "C3", "Cz", "C4", "CP3", "CP4"]
+    print(f"实际使用的通道名称: {actual_channels}")
+    model_visualization(
+        model_name="EEG_Conformer",
+        y_test=test_label_arr,
+        channels=actual_channels,
+        subject=subjects,
+        X_test=test_feature_arr,
+    )
 
     ### =========================== 新增熵特征提取方法测试 ============================ ###
     # srate = 256
