@@ -591,29 +591,29 @@ def entropy_feature(X, y, srate=1000, ch_names=None):
     # 6. 比较不同条件下的熵值
     print("\n6. 比较不同运动想象条件下的熵特征...")
     try:
-        # 分别计算左手和右手条件下的差分熵
-        left_indices = np.where(y == 0)[0]
-        right_indices = np.where(y == 1)[0]
+        class_names = {
+            0: "左手",
+            1: "右手",
+            2: "双脚",
+            3: "双手",
+        }
+        class_de_values = {}
+        for class_id in sorted(np.unique(y)):
+            class_indices = np.where(y == class_id)[0]
+            class_data = X[class_indices]
+            mean_de = np.mean([EntropyAnalyzer.differential_entropy(trial) for trial in class_data], axis=0)
+            class_de_values[class_id] = mean_de
+            class_name = class_names.get(int(class_id), f"类别{class_id}")
+            print(f"   {class_name}运动想象平均差分熵: {np.mean(mean_de):.4f}")
 
-        if len(left_indices) > 0 and len(right_indices) > 0:
-            left_data = X[left_indices]
-            right_data = X[right_indices]
-
-            # 计算平均差分熵
-            left_de = np.mean([EntropyAnalyzer.differential_entropy(trial) for trial in left_data], axis=0)
-            right_de = np.mean([EntropyAnalyzer.differential_entropy(trial) for trial in right_data], axis=0)
-
-            print(f"   左手运动想象平均差分熵: {np.mean(left_de):.4f}")
-            print(f"   右手运动想象平均差分熵: {np.mean(right_de):.4f}")
-            print(f"   差异 (右-左): {np.mean(right_de - left_de):.4f}")
-
-            # 可视化差异脑地形图
-            print("   绘制左右手差异脑地形图...")
+        if len(class_de_values) > 0:
+            mean_de_all_classes = np.mean(list(class_de_values.values()), axis=0)
+            print("   绘制四分类平均差分熵脑地形图...")
             try:
-                EntropyAnalyzer.fun_topoplot(right_de - left_de, ch_names=ch_names)
-                print("   左右手差异脑地形图绘制成功")
+                EntropyAnalyzer.fun_topoplot(mean_de_all_classes, ch_names=ch_names)
+                print("   四分类平均差分熵脑地形图绘制成功")
             except Exception as e:
-                print(f"   左右手差异脑地形图绘制失败: {e}")
+                print(f"   四分类平均差分熵脑地形图绘制失败: {e}")
 
     except Exception as e:
         print(f"   条件比较失败: {e}")
@@ -682,16 +682,8 @@ if __name__ == '__main__':
     ### =========================== 新增熵特征提取方法测试 ============================ ###
     # srate = 256
     # subjects = [1]
-    # pick_chs = ['FC5', 'FC3', 'FC1', 'FCz', 'FC2',
-    #             'FC4', 'FC6', 'C5', 'C3', 'C1', 'Cz', 'C2', 'C4', 'C6',
-    #             'CP5', 'CP3', 'CP1', 'CPz', 'CP2', 'CP4', 'CP6', 'P5',
-    #             'P3', 'P1', 'Pz', 'P2', 'P4', 'P6']
-    # X, y, meta = get_data(srate=srate, subjects=subjects, pick_chs=pick_chs)
-    # actual_n_channels = X.shape[1]
-    # if len(pick_chs) >= actual_n_channels:
-    #     actual_channels = pick_chs[:actual_n_channels]
-    # else: # 如果预定义通道数不够，添加额外的通道名
-    #     actual_channels = pick_chs + [f"Extra_Ch{i}" for i in range(len(pick_chs), actual_n_channels)]
+    # X, y, test_feature_arr, test_label_arr = get_data_new(subjects)
+    # actual_channels = ["FC3", "FCz", "FC4", "C3", "Cz", "C4", "CP3", "CP4"]
     # print(f"实际使用的通道名称: {actual_channels}")
     # entropy_feature(X, y, srate, ch_names=actual_channels)
 
@@ -703,13 +695,13 @@ if __name__ == '__main__':
     #     data = board.get_current_board_data(num_samples=125)
     #     print(data)
 
-    ### =========================== 新增新增VR游戏通信控制模块测试 ============================ ###
+    ### =========================== 新增VR游戏通信控制模块测试 ============================ ###
     # SOCKET_HOST = "localhost"  # Socket 目标 IP
     # SOCKET_PORT = 12345  # Socket 目标端口
     # server_socket, client_socket = command_output(SOCKET_HOST, SOCKET_PORT)
     # while True:
     #     command = input("Enter command (1, 2, 3, 4) or 'exit' to quit: ")
-    # 
+    #
     #     if command.lower() == 'exit':
     #         break
     #     if command in ['1', '2', '3', '4']:
@@ -718,7 +710,7 @@ if __name__ == '__main__':
     #         print(f"Sent: {command}")
     #     else:
     #         print("Invalid command! Use 1, 2, 3, 4, or exit.")
-    # 
+    #
     #     # 接收客户端的到达指令
     #     try:
     #         socket_data = client_socket.recv(1024).decode('ascii')
