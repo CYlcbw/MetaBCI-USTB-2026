@@ -688,12 +688,10 @@ if __name__ == '__main__':
     # entropy_feature(X, y, srate, ch_names=actual_channels)
 
     ### =========================== 新增OpenBCI设备支持代码的测试 ============================ ###
-    # 当前仓库使用 metabci.brainflow.amplifiers.OpenBCI 对接 OpenBCI GUI LSL 数据流。
-    # board.prepare_session()
-    # board.start_stream()  # 打开OpenBCI的数据流
-    # while True:
-    #     data = board.get_current_board_data(num_samples=125)
-    #     print(data)
+    # 测试1：运行 demos/brainflow_demos/openbci_gui_receive_test.py，
+    # 使用 metabci.brainflow.amplifiers.OpenBCI 接收 OpenBCI GUI LSL 数据并打印输出。
+    # 测试2：运行 demos/brainflow_demos/Online_mi4c_new_OpenBCI.py，
+    # 在接收 OpenBCI GUI LSL 数据的基础上完成在线解码与指令输出。
 
     ### =========================== 新增VR游戏通信控制模块测试 ============================ ###
     # SOCKET_HOST = "localhost"  # Socket 目标 IP

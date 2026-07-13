@@ -62,6 +62,8 @@ PREDICTION_TO_LABEL = {0: "left", 1: "right", 2: "retreat", 3: "forward"}
 PREDICTION_TO_COMMAND = {idx: str(idx + 1) for idx in PREDICTION_TO_LABEL}
 FIRST_RUN = True
 MAX_RUNS = 7
+OUTPUT_INTERVAL_SEC = 5
+SOCKET_RECV_TIMEOUT_SEC = 0.5
 
 
 def set_random_seed(seed_value=20250702):
@@ -222,15 +224,47 @@ def preprocess_samples(samples):
     return np.ascontiguousarray(samples[:USED_CHANNELS, :], dtype=np.float32)
 
 
+def resolve_lsl_stream_by_name(stream_name, timeout=5.0):
+    resolver = getattr(pylsl, "resolve_byprop", None)
+    if resolver is not None:
+        return resolver("name", stream_name, minimum=1, timeout=timeout)
+    return [
+        stream for stream in pylsl.resolve_streams(wait_time=timeout)
+        if stream.name() == stream_name
+    ]
+
+
+def update_lsl_buffer(eeg_inlet, eeg_buffer):
+    samples, timestamps = eeg_inlet.pull_chunk(timeout=0.1)
+    if not samples:
+        return eeg_buffer
+    samples_cleaned = preprocess_samples(samples)
+    new_samples = samples_cleaned.shape[1]
+    if new_samples >= WINDOW_LENGTH_SAMPLES:
+        return samples_cleaned[:, -WINDOW_LENGTH_SAMPLES:]
+    eeg_buffer = np.roll(eeg_buffer, -new_samples, axis=1)
+    eeg_buffer[:, -new_samples:] = samples_cleaned
+    return eeg_buffer
+
+
+def wait_and_update_lsl_buffer(eeg_inlet, eeg_buffer, wait_seconds):
+    wait_start = time.time()
+    while time.time() - wait_start < wait_seconds:
+        eeg_buffer = update_lsl_buffer(eeg_inlet, eeg_buffer)
+        time.sleep(0.01)
+    return eeg_buffer
+
+
 if __name__ == "__main__":
     subjects = [1]
 
     # 1. 初始化 Socket
     server_socket, client_socket = command_output(SOCKET_HOST, SOCKET_PORT)
+    client_socket.settimeout(SOCKET_RECV_TIMEOUT_SEC)
 
     # 2. 初始化 LSL EEG 数据流
     print(f"正在搜索 LSL EEG 流: {LSL_EEG_STREAM_NAME}...")
-    streams = pylsl.resolve_stream("name", LSL_EEG_STREAM_NAME)
+    streams = resolve_lsl_stream_by_name(LSL_EEG_STREAM_NAME)
     if not streams:
         raise RuntimeError(f"未找到 EEG 流: {LSL_EEG_STREAM_NAME}")
     eeg_inlet = pylsl.StreamInlet(streams[0])
@@ -265,43 +299,21 @@ if __name__ == "__main__":
     print("按空格键开始实时解码...")
     keyboard.wait("space")
 
-    first_run = FIRST_RUN
-    socket_data = None
     run_times = 0
 
     try:
         print("开始实时解码（按 Ctrl+C 停止）...")
+        print(f"采集 {OUTPUT_INTERVAL_SEC} 秒初始 EEG 数据...")
+        eeg_buffer = wait_and_update_lsl_buffer(
+            eeg_inlet,
+            eeg_buffer,
+            OUTPUT_INTERVAL_SEC,
+        )
         while True:
-            samples, timestamps = eeg_inlet.pull_chunk(timeout=0.1)
-            if samples:
-                samples_cleaned = preprocess_samples(samples)
-                new_samples = samples_cleaned.shape[1]
-                if new_samples >= WINDOW_LENGTH_SAMPLES:
-                    eeg_buffer = samples_cleaned[:, -WINDOW_LENGTH_SAMPLES:]
-                else:
-                    eeg_buffer = np.roll(eeg_buffer, -new_samples, axis=1)
-                    eeg_buffer[:, -new_samples:] = samples_cleaned
-
-            decode_allowed = first_run or (socket_data == "arrived")
-            if decode_allowed and eeg_buffer.shape[1] == WINDOW_LENGTH_SAMPLES:
-                if first_run:
-                    first_run = False
-
-                start_time = time.time()
-                while time.time() - start_time < 5:
-                    samples, timestamps = eeg_inlet.pull_chunk(timeout=0.1)
-                    if samples:
-                        samples_cleaned = preprocess_samples(samples)
-                        new_samples = samples_cleaned.shape[1]
-                        if new_samples >= WINDOW_LENGTH_SAMPLES:
-                            eeg_buffer = samples_cleaned[:, -WINDOW_LENGTH_SAMPLES:]
-                        else:
-                            eeg_buffer = np.roll(eeg_buffer, -new_samples, axis=1)
-                            eeg_buffer[:, -new_samples:] = samples_cleaned
-                    time.sleep(0.01)
-
-                eeg_buffer = scaler.fit_transform(eeg_buffer)
-                input_data = eeg_buffer.reshape(1, *eeg_buffer.shape)
+            eeg_buffer = update_lsl_buffer(eeg_inlet, eeg_buffer)
+            if eeg_buffer.shape[1] == WINDOW_LENGTH_SAMPLES:
+                eeg_window = scaler.fit_transform(eeg_buffer)
+                input_data = eeg_window.reshape(1, *eeg_window.shape)
                 if isinstance(input_data, torch.Tensor):
                     X_test = input_data.to(torch.float32)
                 else:
@@ -311,18 +323,24 @@ if __name__ == "__main__":
                 label = PREDICTION_TO_LABEL[prediction]
                 command = PREDICTION_TO_COMMAND[prediction]
                 client_socket.sendall(command.encode("ascii"))
-                print(f"解码结果: {label}, command={command}")
+                run_times += 1
+                print(f"解码结果({run_times}/{MAX_RUNS}): {label}, command={command}")
                 try:
                     socket_data = client_socket.recv(1024).decode("ascii")
                     if socket_data:
                         print(f"Received from client: {socket_data}")
-                        if "arrived" in socket_data:
-                            socket_data = "arrived"
-                except:
+                except TimeoutError:
+                    print("未收到客户端响应，继续按固定间隔输出")
+                except Exception:
                     print("Error receiving data")
-                run_times += 1
                 if MAX_RUNS and run_times >= MAX_RUNS:
                     break
+                print(f"等待 {OUTPUT_INTERVAL_SEC} 秒后进行下一次解码...")
+                eeg_buffer = wait_and_update_lsl_buffer(
+                    eeg_inlet,
+                    eeg_buffer,
+                    OUTPUT_INTERVAL_SEC,
+                )
 
     except KeyboardInterrupt:
         print("用户终止程序...")
