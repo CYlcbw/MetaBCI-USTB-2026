@@ -22,7 +22,7 @@ from metabci.brainda.datasets.ustb2026mi4c import USTB2026MI4C
 warnings.filterwarnings("ignore")
 
 
-SUBJECTS = [1, 2, 3, 4, 5]
+SUBJECTS = [1]
 WINDOW_LENGTH = 256
 STRIDE = 256
 TEST_SIZE = 0.2
