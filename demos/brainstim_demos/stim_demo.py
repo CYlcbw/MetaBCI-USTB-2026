@@ -319,7 +319,7 @@ if __name__ == "__main__":
     rest_time = 1
     image_time = 4
     response_time = 2
-    port_addr = ("127.0.0.1", 12350)
+    port_addr = None
     nrep = 15
     lsl_source_id = "meta_online_worker"
     online = False
