@@ -58,10 +58,7 @@ class USTB2026MI4C(BaseDataset):
         2: [("base8_s01_s04_final", "S02_base8_all_runs.npz")],
         3: [("base8_s01_s04_final", "S03_base8_all_runs.npz")],
         4: [("base8_s01_s04_final", "S04_base8_all_runs.npz")],
-        5: [
-            ("base8_s01_s04_final", "S05_base8_all_runs.npz"),
-            ("base8_s01_s05_final", "S05_base8_all_runs.npz"),
-        ],
+        5: [("base8_s01_s05_final", "S05_base8_all_runs.npz")],
     }
 
     _REMOTE_SUBJECT_FILES = {
