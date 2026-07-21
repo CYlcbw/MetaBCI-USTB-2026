@@ -40,7 +40,7 @@ warnings.filterwarnings("ignore")
 
 # ===== 参数配置 =====
 LSL_EEG_STREAM_NAME = "CURRYStream"
-SOCKET_HOST = "0.0.0.0"
+SOCKET_HOST = "192.168.3.17"
 SOCKET_PORT = 12345
 
 MODEL_SAVE_PATH = os.path.join(
@@ -63,7 +63,6 @@ PREDICTION_TO_COMMAND = {idx: str(idx + 1) for idx in PREDICTION_TO_LABEL}
 FIRST_RUN = True
 MAX_RUNS = 7
 OUTPUT_INTERVAL_SEC = 5
-SOCKET_RECV_TIMEOUT_SEC = 0.5
 
 
 def set_random_seed(seed_value=20250702):
@@ -251,6 +250,7 @@ def wait_and_update_lsl_buffer(eeg_inlet, eeg_buffer, wait_seconds):
     wait_start = time.time()
     while time.time() - wait_start < wait_seconds:
         eeg_buffer = update_lsl_buffer(eeg_inlet, eeg_buffer)
+        print("eeg_buffer shape: ", eeg_buffer.shape)
         time.sleep(0.01)
     return eeg_buffer
 
@@ -260,7 +260,6 @@ if __name__ == "__main__":
 
     # 1. 初始化 Socket
     server_socket, client_socket = command_output(SOCKET_HOST, SOCKET_PORT)
-    client_socket.settimeout(SOCKET_RECV_TIMEOUT_SEC)
 
     # 2. 初始化 LSL EEG 数据流
     print(f"正在搜索 LSL EEG 流: {LSL_EEG_STREAM_NAME}...")
@@ -299,48 +298,54 @@ if __name__ == "__main__":
     print("按空格键开始实时解码...")
     keyboard.wait("space")
 
+    first_run = FIRST_RUN
     run_times = 0
+    socket_data = None
 
     try:
         print("开始实时解码（按 Ctrl+C 停止）...")
-        print(f"采集 {OUTPUT_INTERVAL_SEC} 秒初始 EEG 数据...")
-        eeg_buffer = wait_and_update_lsl_buffer(
-            eeg_inlet,
-            eeg_buffer,
-            OUTPUT_INTERVAL_SEC,
-        )
         while True:
             eeg_buffer = update_lsl_buffer(eeg_inlet, eeg_buffer)
-            if eeg_buffer.shape[1] == WINDOW_LENGTH_SAMPLES:
+            print("eeg_buffer shape: ", eeg_buffer.shape)
+
+            # 检查是否满足解码条件
+            decode_allowed = first_run or (socket_data == "arrived")
+            if decode_allowed and eeg_buffer.shape[1] == WINDOW_LENGTH_SAMPLES:
+                if first_run:
+                    first_run = False
+
+                # 执行解码（等待5秒期间持续更新数据）
+                eeg_buffer = wait_and_update_lsl_buffer(
+                    eeg_inlet,
+                    eeg_buffer,
+                    OUTPUT_INTERVAL_SEC,
+                )
+                print("eeg_buffer shape: ", eeg_buffer.shape)
+
+                # 5秒后调用模型并发送结果
                 eeg_window = scaler.fit_transform(eeg_buffer)
                 input_data = eeg_window.reshape(1, *eeg_window.shape)
                 if isinstance(input_data, torch.Tensor):
                     X_test = input_data.to(torch.float32)
                 else:
                     X_test = torch.from_numpy(input_data).to(torch.float32)
+                print("X_test shape: ", X_test.shape)
                 prediction = model(X_test)
                 prediction = int(softmax(prediction, dim=-1).argmax(dim=-1).numpy()[0])
                 label = PREDICTION_TO_LABEL[prediction]
                 command = PREDICTION_TO_COMMAND[prediction]
-                client_socket.sendall(command.encode("ascii"))
-                run_times += 1
-                print(f"解码结果({run_times}/{MAX_RUNS}): {label}, command={command}")
+                message = command.encode("ascii")
+                client_socket.send(message)
+                print(f"解码结果: {label}")
                 try:
                     socket_data = client_socket.recv(1024).decode("ascii")
                     if socket_data:
                         print(f"Received from client: {socket_data}")
-                except TimeoutError:
-                    print("未收到客户端响应，继续按固定间隔输出")
                 except Exception:
                     print("Error receiving data")
+                run_times += 1
                 if MAX_RUNS and run_times >= MAX_RUNS:
                     break
-                print(f"等待 {OUTPUT_INTERVAL_SEC} 秒后进行下一次解码...")
-                eeg_buffer = wait_and_update_lsl_buffer(
-                    eeg_inlet,
-                    eeg_buffer,
-                    OUTPUT_INTERVAL_SEC,
-                )
 
     except KeyboardInterrupt:
         print("用户终止程序...")
