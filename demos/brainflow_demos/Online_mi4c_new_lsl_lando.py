@@ -15,6 +15,7 @@ import time
 import numpy as np
 import pylsl
 import torch
+import keyboard
 from sklearn.preprocessing import StandardScaler
 from torch.nn.functional import softmax
 
@@ -172,7 +173,9 @@ def run_lando_online_flow():
         run_times = 0
         socket_data = None
 
-        print("lando 模拟模式：无需按空格，开始实时解码...")
+        print("lando 模拟模式：模拟 LSL EEG 流和 VR 客户端已就绪。")
+        print("按空格键开始实时解码...")
+        keyboard.wait("space")
 
         while run_times < MAX_RUNS:
             eeg_buffer = update_lsl_buffer(eeg_inlet, eeg_buffer)
