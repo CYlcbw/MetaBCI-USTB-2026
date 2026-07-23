@@ -29,9 +29,7 @@ from Online_mi4c_new_lsl import (
     OUTPUT_INTERVAL_SEC,
     PREDICTION_TO_COMMAND,
     PREDICTION_TO_LABEL,
-    SOCKET_HOST,
     SOCKET_PORT,
-    SOCKET_RECV_TIMEOUT_SEC,
     USED_CHANNELS,
     WINDOW_LENGTH_SAMPLES,
     get_data_new,
@@ -45,6 +43,7 @@ from simulate_online_lsl_streams import create_eeg_outlet, make_eeg_chunk
 
 
 CLIENT_CONNECT_HOST = "127.0.0.1"
+LOCAL_SOCKET_HOST = "127.0.0.1"
 SIMULATED_LSL_CHUNK_SIZE = 16
 
 
@@ -143,8 +142,7 @@ def run_lando_online_flow():
 
     try:
         # 1. 初始化 Socket，并由本脚本内部模拟客户端连接。
-        server_socket, client_socket = command_output(SOCKET_HOST, SOCKET_PORT)
-        client_socket.settimeout(SOCKET_RECV_TIMEOUT_SEC)
+        server_socket, client_socket = command_output(LOCAL_SOCKET_HOST, SOCKET_PORT)
 
         # 2. 初始化 LSL EEG 数据流。
         print(f"正在搜索 LSL EEG 流: {LSL_EEG_STREAM_NAME}...")
@@ -170,49 +168,49 @@ def run_lando_online_flow():
         # 5. 使用模拟 LSL 数据执行 7 次在线解码输出。
         eeg_buffer = np.zeros((USED_CHANNELS, WINDOW_LENGTH_SAMPLES), dtype=np.float32)
         scaler = StandardScaler()
+        first_run = True
         run_times = 0
+        socket_data = None
 
         print("lando 模拟模式：无需按空格，开始实时解码...")
-        print(f"采集 {OUTPUT_INTERVAL_SEC} 秒初始 EEG 数据...")
-        eeg_buffer = wait_and_update_lsl_buffer(
-            eeg_inlet,
-            eeg_buffer,
-            OUTPUT_INTERVAL_SEC,
-        )
 
         while run_times < MAX_RUNS:
             eeg_buffer = update_lsl_buffer(eeg_inlet, eeg_buffer)
-            eeg_window = scaler.fit_transform(eeg_buffer)
-            input_data = eeg_window.reshape(1, *eeg_window.shape)
-            X_test = torch.from_numpy(input_data).to(torch.float32)
+            print("eeg_buffer shape: ", eeg_buffer.shape)
 
-            prediction = model(X_test)
-            prediction = int(softmax(prediction, dim=-1).argmax(dim=-1).numpy()[0])
-            label = PREDICTION_TO_LABEL[prediction]
-            command = PREDICTION_TO_COMMAND[prediction]
-            client_socket.sendall(command.encode("ascii"))
+            decode_allowed = first_run or (socket_data == "arrived")
+            if not decode_allowed:
+                continue
+            if first_run:
+                first_run = False
 
-            run_times += 1
-            print(f"解码结果({run_times}/{MAX_RUNS}): {label}, command={command}")
-
-            try:
-                socket_data = client_socket.recv(1024).decode("ascii")
-                if socket_data:
-                    print(f"Received from client: {socket_data}")
-            except TimeoutError:
-                print("未收到客户端响应，继续按固定间隔输出")
-            except Exception:
-                print("Error receiving data")
-
-            if run_times >= MAX_RUNS:
-                break
-
-            print(f"等待 {OUTPUT_INTERVAL_SEC} 秒后进行下一次解码...")
             eeg_buffer = wait_and_update_lsl_buffer(
                 eeg_inlet,
                 eeg_buffer,
                 OUTPUT_INTERVAL_SEC,
             )
+            print("eeg_buffer shape: ", eeg_buffer.shape)
+
+            eeg_window = scaler.fit_transform(eeg_buffer)
+            input_data = eeg_window.reshape(1, *eeg_window.shape)
+            X_test = torch.from_numpy(input_data).to(torch.float32)
+            print("X_test shape: ", X_test.shape)
+
+            prediction = model(X_test)
+            prediction = int(softmax(prediction, dim=-1).argmax(dim=-1).numpy()[0])
+            label = PREDICTION_TO_LABEL[prediction]
+            command = PREDICTION_TO_COMMAND[prediction]
+            client_socket.send(command.encode("ascii"))
+
+            run_times += 1
+            print(f"解码结果: {label}")
+
+            try:
+                socket_data = client_socket.recv(1024).decode("ascii")
+                if socket_data:
+                    print(f"Received from client: {socket_data}")
+            except Exception:
+                print("Error receiving data")
 
     finally:
         stop_event.set()
